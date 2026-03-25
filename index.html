@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Johanneshovrör</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+    }
+
+    /* Chat button */
+    #chat-button {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: #0a7cff;
+      color: white;
+      font-size: 24px;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    }
+
+    /* Chat widget */
+    #chat-widget {
+      display: none;
+      position: fixed;
+      bottom: 90px;
+      right: 20px;
+      width: 330px;
+      height: 450px;
+      background: white;
+      border-radius: 15px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      overflow: hidden;
+      flex-direction: column;
+    }
+
+    /* Header */
+    #chat-header {
+      background: #0a7cff;
+      color: white;
+      padding: 12px;
+      font-weight: bold;
+    }
+
+    /* Chat area */
+    #chat-box {
+      flex: 1;
+      padding: 10px;
+      overflow-y: auto;
+      background: #f5f7fa;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Messages */
+    .msg {
+      padding: 8px 12px;
+      border-radius: 12px;
+      margin: 5px 0;
+      max-width: 75%;
+      font-size: 14px;
+    }
+
+    .user {
+      background: #0a7cff;
+      color: white;
+      align-self: flex-end;
+    }
+
+    .bot {
+      background: #e4e6eb;
+      align-self: flex-start;
+    }
+
+    /* Typing animation */
+    .typing {
+      display: flex;
+      gap: 5px;
+      padding: 8px 12px;
+      background: #e4e6eb;
+      border-radius: 12px;
+      width: fit-content;
+      margin: 5px 0;
+    }
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      background: #666;
+      border-radius: 50%;
+      animation: blink 1.4s infinite;
+    }
+
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes blink {
+      0% { opacity: 0.2; }
+      20% { opacity: 1; }
+      100% { opacity: 0.2; }
+    }
+
+    /* Input area */
+    #chat-input-area {
+      display: flex;
+      border-top: 1px solid #ddd;
+    }
+
+    #chat-input {
+      flex: 1;
+      border: none;
+      padding: 12px;
+      outline: none;
+    }
+
+    #send-btn {
+      background: #0a7cff;
+      color: white;
+      border: none;
+      padding: 12px;
+      cursor: pointer;
+    }
+
+  </style>
+</head>
+
+<body>
+
+<h1>Johanneshovrör</h1>
+<p>Välkommen! Vi hjälper Dig med VVS-arbeten.</p>
+
+<!-- Chat button -->
+<button id="chat-button" onclick="toggleChat()">💬</button>
+
+<!-- Chat widget -->
+<div id="chat-widget">
+
+  <div id="chat-header">
+    Johanneshovrör Support
+  </div>
+
+  <div id="chat-box"></div>
+
+  <div id="chat-input-area">
+    <input id="chat-input" placeholder="Skriv meddelande...">
+    <button id="send-btn" onclick="sendMessage()">➤</button>
+  </div>
+
+</div>
+
+<script>
+
+const userId = localStorage.getItem("userId") || crypto.randomUUID();
+localStorage.setItem("userId", userId);
+
+
+// Toggle chat
+function toggleChat() {
+  let chat = document.getElementById("chat-widget");
+  chat.style.display = chat.style.display === "none" ? "flex" : "none";
+}
+
+// Add message
+function addMessage(text, sender) {
+  let box = document.getElementById("chat-box");
+
+  let div = document.createElement("div");
+  div.classList.add("msg", sender);
+  div.innerText = text;
+
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+// Typing indicator
+function showTyping() {
+  let box = document.getElementById("chat-box");
+
+  let typing = document.createElement("div");
+  typing.classList.add("typing");
+  typing.id = "typing";
+
+  typing.innerHTML = `
+    <div class="dot"></div>
+    <div class="dot"></div>
+    <div class="dot"></div>
+  `;
+
+  box.appendChild(typing);
+  box.scrollTop = box.scrollHeight;
+}
+
+function removeTyping() {
+  let typing = document.getElementById("typing");
+  if (typing) typing.remove();
+}
+
+// Show replies like WhatsApp
+async function showReplies(replies) {
+  for (let i = 0; i < replies.length; i++) {
+
+    showTyping();
+
+    await new Promise(resolve => setTimeout(resolve, 700));
+
+    removeTyping();
+
+    addMessage(replies[i], "bot");
+
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+}
+
+// Send message
+let isSending = false; // ADD THIS at top of your script
+
+async function sendMessage() {
+  let input = document.getElementById("chat-input");
+  let msg = input.value;
+
+  if (!msg) return;
+
+  // 🚫 prevent spam clicking
+  if (isSending) return;
+  isSending = true;
+
+  addMessage(msg, "user");
+  input.value = "";
+
+  // ⏳ only show typing if slow
+  let typingTimeout = setTimeout(() => {
+    showTyping();
+  }, 800);
+
+  try {
+    // wake server
+    await fetch("https://ai-rormokare.onrender.com/ping");
+
+    let res = await fetch("https://ai-rormokare.onrender.com/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        message: msg,
+        userId: userId
+      })
+    });
+
+    let data = await res.json();
+
+    clearTimeout(typingTimeout);
+    removeTyping();
+
+    await showReplies(data.replies);
+
+  } catch (err) {
+    clearTimeout(typingTimeout);
+    removeTyping();
+
+    addMessage("⏳ Servern startar... försök igen om några sekunder", "bot");
+  }
+
+  // ✅ allow sending again
+  isSending = false;
+
+  // ✅ focus input again (nice UX)
+  input.focus();
+}
+
+// Enter key
+document.getElementById("chat-input").addEventListener("keypress", function(e) {
+  if (e.key === "Enter") sendMessage();
+});
+
+</script>
+
+</body>
+</html>
