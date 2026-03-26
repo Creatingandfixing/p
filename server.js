@@ -64,7 +64,7 @@ async function sendBookingEmail(data) {
   try {
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
-      to: process.env.EMAIL_USER,
+      to: process.env.BOOKING_EMAIL,
       subject: "🚨 Ny VVS Bokning",
       text: `
 🚨 Ny bokning
