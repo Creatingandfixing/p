@@ -231,9 +231,35 @@ app.post("/chat", async (req, res) => {
 
     // handle "nej"
     if (msg === "nej") {
-      const reply = await aiReply(state, "kunden sa nej, gå vidare");
-      return res.json({ replies: [reply] });
-    }
+
+  if (!state.name) {
+    return res.json({
+      replies: ["Okej 👍 vad heter du då?"]
+    });
+  }
+
+  if (!state.phone) {
+    return res.json({
+      replies: ["Har du ett nummer jag kan nå dig på?"]
+    });
+  }
+
+  if (!state.address) {
+    return res.json({
+      replies: ["Vilken adress gäller det?"]
+    });
+  }
+
+  if (!state.time) {
+    return res.json({
+      replies: ["När passar det för dig?"]
+    });
+  }
+
+  return res.json({
+    replies: ["Toppen 👍 då kör vi på det"]
+  });
+}
 
     // fallback if no problem
     if (!state.problem) {
