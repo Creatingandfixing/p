@@ -1,10 +1,11 @@
 import dotenv from "dotenv";
 dotenv.config();
+
 import express from "express";
 import cors from "cors";
 import fs from "fs";
 import OpenAI from "openai";
-import stringSimilarity from "string-similarity";
+import nodemailer from "nodemailer";
 
 const app = express();
 app.use(cors());
@@ -19,13 +20,12 @@ let users = {};
 // -------- HELPERS --------
 
 function clean(msg) {
-  if (!msg) return "";
-  return msg.toLowerCase().trim();
+  return msg?.toLowerCase().trim() || "";
 }
 
 function capitalize(str) {
   return str
-    .split(" ")
+    ?.split(" ")
     .map(w => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 }
@@ -35,111 +35,127 @@ function isValidPhone(phone) {
 }
 
 function isValidAddress(addr) {
-  if (!addr) return false;
-  if (addr.length < 4) return false;
-  if (addr.match(/^\d+$/)) return false;
-  if (!addr.match(/\d/) && !addr.match(/gatan|vägen|väg|plan|gränd/)) return false;
-  return true;
+  return addr && addr.length > 4 && addr.match(/\d/);
 }
 
-// -------- FALLBACK --------
+// -------- SAFE JSON PARSE --------
 
-function fallbackProblem(msg) {
-  const problems = [
-    { words: ["läcka", "läck", "dropp"], label: "Vattenläcka" },
-    { words: ["stopp", "avlopp"], label: "Stopp i avlopp" },
-    { words: ["handfat", "kran"], label: "Problem med handfat" }
-  ];
-
-  for (let p of problems) {
-    for (let word of msg.split(" ")) {
-      for (let w of p.words) {
-        if (stringSimilarity.compareTwoStrings(word, w) > 0.7) {
-          return p.label;
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-// -------- AI EXTRACTION --------
-
-async function extractWithAI(message) {
-  if (!message || message.length < 3) return {};
-
+function safeParse(text) {
   try {
-    const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      max_tokens: 200,
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content: `
-You are a Swedish plumbing assistant.
-
-Extract structured booking info.
-
-Return ONLY JSON:
-
-{
-  "name": string or null,
-  "phone": string or null,
-  "address": string or null,
-  "time": string or null,
-  "problem": short label in Swedish,
-  "details": detailed explanation in Swedish,
-  "urgency": "low" | "medium" | "high"
-}
-
-Do not invent data.
-`
-        },
-        { role: "user", content: message }
-      ]
-    });
-
-    return JSON.parse(res.choices[0].message.content);
-
+    const cleaned = text
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
+    return JSON.parse(cleaned);
   } catch {
     return {};
   }
 }
 
-// -------- HUMAN RESPONSE --------
+// -------- EMAIL SETUP (one.com) --------
 
-async function humanReply(context) {
+const transporter = nodemailer.createTransport({
+  host: "smtp.one.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
+
+// -------- SEND EMAIL --------
+
+async function sendBookingEmail(data) {
+  try {
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: process.env.EMAIL_USER,
+      subject: "🚨 Ny VVS Bokning",
+      text: `
+🚨 Ny bokning
+
+Problem: ${data.problem}
+Detaljer: ${data.details || "-"}
+
+👤 ${data.name}
+📞 ${data.phone}
+📍 ${data.address}
+⏰ ${data.time}
+      `
+    });
+  } catch (err) {
+    console.error("Email error:", err);
+  }
+}
+
+// -------- AI EXTRACTION --------
+
+async function aiExtract(message) {
+  const prompt = `
+Extract info from this Swedish plumbing request.
+
+Return JSON only:
+{
+  "problem": "",
+  "details": "",
+  "urgency": "low/medium/high",
+  "name": "",
+  "phone": "",
+  "address": "",
+  "time": ""
+}
+
+Message: "${message}"
+`;
+
   try {
     const res = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      max_tokens: 80,
-      temperature: 0.7,
-      messages: [
-        {
-          role: "system",
-          content: `
+      temperature: 0.2,
+      messages: [{ role: "user", content: prompt }]
+    });
+
+    return safeParse(res.choices[0].message.content);
+
+  } catch (err) {
+    console.error("AI extract error:", err);
+    return {};
+  }
+}
+
+// -------- AI RESPONSE --------
+
+async function aiReply(state, message) {
+  const prompt = `
 You are a friendly Swedish plumbing assistant.
 
+Customer said: "${message}"
+
+Known info:
+${JSON.stringify(state)}
+
 Rules:
-- Natural tone
+- Natural Swedish
 - Short (1 sentence)
-- Warm but professional
+- Ask for missing info
+- If urgent → sound faster
 - Max 1 emoji
-`
-        },
-        {
-          role: "user",
-          content: context
-        }
-      ]
+`;
+
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.7,
+      max_tokens: 80,
+      messages: [{ role: "user", content: prompt }]
     });
 
     return res.choices[0].message.content;
 
-  } catch {
-    return null;
+  } catch (err) {
+    console.error("AI reply error:", err);
+    return "Kan du skriva det igen? 🙂";
   }
 }
 
@@ -157,169 +173,70 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    if (!users[userId]) {
-      users[userId] = { step: "problem" };
-    }
-
+    if (!users[userId]) users[userId] = {};
     let state = users[userId];
-    state.lastActive = Date.now();
+
+    // spam protection
+    if (state.lastBooking && Date.now() - state.lastBooking < 60000) {
+      return res.json({
+        replies: ["Vi har redan registrerat din bokning 👍"]
+      });
+    }
 
     // AI extraction
-    let aiData = await extractWithAI(raw);
+    const data = await aiExtract(raw);
 
-    if (!aiData.problem) {
-      aiData.problem = fallbackProblem(msg);
-    }
+    if (data.problem) state.problem = data.problem;
+    if (data.details) state.details = data.details;
+    if (data.name) state.name = capitalize(data.name);
+    if (data.phone && isValidPhone(data.phone)) state.phone = data.phone;
+    if (data.address && isValidAddress(data.address)) state.address = capitalize(data.address);
+    if (data.time) state.time = data.time;
+    if (data.urgency) state.urgency = data.urgency;
 
-    // validation
-    if (aiData.phone && !isValidPhone(aiData.phone)) {
-      aiData.phone = null;
-    }
-
-    if (aiData.address && !isValidAddress(aiData.address)) {
-      aiData.address = null;
-    }
-
-    // save
-    if (aiData.problem && !state.problem) state.problem = aiData.problem;
-    if (aiData.details && !state.details) state.details = aiData.details;
-    if (aiData.name && !state.name) state.name = capitalize(aiData.name);
-    if (aiData.phone && !state.phone) state.phone = aiData.phone;
-    if (aiData.address && !state.address) state.address = capitalize(aiData.address);
-    if (aiData.time && !state.time) state.time = aiData.time;
-
-    if (msg.includes("nej")) {
-      users[userId] = { step: "problem" };
+    // fallback if no problem
+    if (!state.problem) {
       return res.json({
-        replies: ["Okej, vi börjar om 😊 Vad behöver du hjälp med?"]
+        replies: ["Kan du beskriva problemet lite kort?"]
       });
     }
 
-    if (state.done) {
-      return res.json({
-        replies: ["Din bokning är redan registrerad 👍"]
-      });
-    }
+    // COMPLETE BOOKING
+    if (
+      state.problem &&
+      state.name &&
+      state.phone &&
+      state.address &&
+      state.time
+    ) {
 
-    // FLOW
+      fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
 
-    if (state.step === "problem") {
-      if (!state.problem) {
-        return res.json({
-          replies: ["Kan du beskriva problemet lite kort?"]
-        });
-      }
+      await sendBookingEmail(state);
 
-      state.step = "name";
-
-      const reply = await humanReply(
-        `User has problem: ${state.problem}. Ask for name.`
-      );
-
-      return res.json({
-        replies: [reply || "Vad heter du?"]
-      });
-    }
-
-    if (state.step === "name") {
-      if (!state.name) {
-        return res.json({
-          replies: ["Vad heter du?"]
-        });
-      }
-
-      state.step = "phone";
-
-      const reply = await humanReply(
-        `User name is ${state.name}. Ask for phone number.`
-      );
-
-      return res.json({
-        replies: [reply || `Vad är ditt telefonnummer?`]
-      });
-    }
-
-    if (state.step === "phone") {
-      if (!isValidPhone(state.phone)) {
-        return res.json({
-          replies: ["Skriv ett giltigt telefonnummer 🙂"]
-        });
-      }
-
-      state.step = "address";
-
-      const reply = await humanReply(`Ask for address politely`);
-
-      return res.json({
-        replies: [reply || "Vilken adress gäller det?"]
-      });
-    }
-
-    if (state.step === "address") {
-      if (!isValidAddress(state.address)) {
-        return res.json({
-          replies: ["Skriv en giltig adress 🙂"]
-        });
-      }
-
-      state.step = "time";
-
-      const reply = await humanReply(`Ask for booking time`);
-
-      return res.json({
-        replies: [reply || "När passar det för dig?"]
-      });
-    }
-
-    if (state.step === "time") {
-      if (!state.time) {
-        return res.json({
-          replies: ["Vilken tid passar dig?"]
-        });
-      }
-
-      state.step = "confirm";
+      state.lastBooking = Date.now();
+      users[userId] = {};
 
       return res.json({
         replies: [
-          "Perfekt 👍 Här är det jag har:",
-          `Problem: ${state.problem}`,
-          state.details ? `Detaljer: ${state.details}` : null,
-          `Namn: ${state.name}`,
-          `Telefon: ${state.phone}`,
-          `Adress: ${state.address}`,
-          `Tid: ${state.time}`,
-          "Stämmer detta? (ja/nej)"
-        ].filter(Boolean)
+          `Tack ${state.name}! 🙌`,
+          "Din bokning är registrerad",
+          state.urgency === "high"
+            ? "Vi prioriterar detta direkt."
+            : "Vi hör av oss snart!"
+        ]
       });
     }
 
-    if (state.step === "confirm") {
-      if (msg.includes("ja")) {
-        fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
-
-        state.done = true;
-
-        return res.json({
-          replies: [
-            `Tack ${state.name}!`,
-            "Din bokning är registrerad 👍",
-            "Vi kontaktar dig snart."
-          ]
-        });
-      }
-
-      return res.json({
-        replies: ["Skriv 'ja' eller 'nej' 🙂"]
-      });
-    }
+    // AI follow-up
+    const reply = await aiReply(state, raw);
 
     return res.json({
-      replies: ["Något gick fel 🤔"]
+      replies: [reply]
     });
 
   } catch (err) {
-    console.error(err);
+    console.error("MAIN ERROR:", err);
     return res.json({
       replies: ["Något gick fel 🤔 Försök igen."]
     });
@@ -330,5 +247,5 @@ app.post("/chat", async (req, res) => {
 app.get("/ping", (req, res) => res.send("OK"));
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🔥 HUMAN AI BOT RUNNING");
+  console.log("🔥 AI BOOKING BOT RUNNING");
 });
