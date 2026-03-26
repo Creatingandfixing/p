@@ -6,12 +6,10 @@ import cors from "cors";
 import fs from "fs";
 import OpenAI from "openai";
 import nodemailer from "nodemailer";
-import path from "path";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public")); // 👈 serve frontend
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -22,26 +20,28 @@ let users = {};
 // -------- HELPERS --------
 
 function clean(msg) {
-  return msg?.toLowerCase().trim() || "";
+  return msg?.toString().toLowerCase().trim().slice(0, 500) || "";
 }
 
 function capitalize(str) {
+  if (!str) return "";
   return str
-    ?.split(" ")
+    .split(" ")
     .map(w => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 }
 
 function isValidPhone(phone) {
-  return phone && phone.match(/^\d{7,}$/);
+  return typeof phone === "string" && /^\d{7,15}$/.test(phone);
 }
 
 function isValidAddress(addr) {
-  return addr && addr.length > 4 && addr.match(/\d/);
+  return typeof addr === "string" && addr.length > 4 && /\d/.test(addr);
 }
 
 function safeParse(text) {
   try {
+    if (!text || typeof text !== "string") return {};
     return JSON.parse(
       text.replace(/```json/g, "").replace(/```/g, "").trim()
     );
@@ -69,26 +69,34 @@ async function sendBookingEmail(data) {
       to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
       subject: "🚨 Ny VVS Bokning",
       text: `
-Problem: ${data.problem}
-Namn: ${data.name}
-Telefon: ${data.phone}
-Adress: ${data.address}
-Tid: ${data.time}
+Problem: ${data.problem || "-"}
+Detaljer: ${data.details || "-"}
+
+Namn: ${data.name || "-"}
+Telefon: ${data.phone || "-"}
+Adress: ${data.address || "-"}
+Tid: ${data.time || "-"}
       `
     });
   } catch (err) {
-    console.error("Email error:", err);
+    console.error("Email error:", err.message);
   }
 }
 
 // -------- AI --------
 
 async function aiExtract(message) {
-  const prompt = `
-Analysera kundens meddelande till en rörmokare.
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      messages: [
+        {
+          role: "user",
+          content: `
+Extract info from this Swedish plumbing message.
 
-Returnera ENDAST JSON:
-
+Return ONLY JSON:
 {
   "problem": "",
   "details": "",
@@ -99,86 +107,178 @@ Returnera ENDAST JSON:
   "time": ""
 }
 
-Meddelande: "${message}"
-`;
-
-  try {
-    const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.3,
-      messages: [{ role: "user", content: prompt }]
+Message: "${message}"
+`
+        }
+      ]
     });
 
-    return safeParse(res.choices[0].message.content);
+    return safeParse(res.choices?.[0]?.message?.content);
   } catch {
     return {};
   }
 }
 
-// -------- CHAT --------
+// -------- MAIN --------
 
 app.post("/chat", async (req, res) => {
   try {
-    const raw = req.body.message;
+    const raw = req.body?.message || "";
     const msg = clean(raw);
-    const userId = req.body.userId || Math.random().toString(36);
+    const userId =
+      req.body?.userId || Math.random().toString(36).slice(2);
 
     if (!msg) {
-      return res.json({ replies: ["Tja! Vad kan jag hjälpa dig med? 🙂"] });
-    }
-
-    if (!users[userId]) users[userId] = {};
-    let state = users[userId];
-
-    if (state.lastBooking && Date.now() - state.lastBooking < 60000) {
-      return res.json({ replies: ["Jag har redan lagt in det 👍"] });
-    }
-
-    const data = await aiExtract(raw);
-
-    if (data.problem && !state.problem) state.problem = data.problem;
-    if (data.name && !state.name) state.name = capitalize(data.name);
-    if (data.phone && isValidPhone(data.phone)) state.phone = data.phone;
-    if (data.address && isValidAddress(data.address)) state.address = capitalize(data.address);
-    if (data.time) state.time = data.time;
-
-    // BOOKING
-    if (state.problem && state.name && state.phone && state.address && state.time) {
-      fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
-      await sendBookingEmail(state);
-
-      state.lastBooking = Date.now();
-      users[userId] = {};
-
       return res.json({
-        replies: [`Perfekt ${state.name} 👍`, "Vi hör av oss snart!"]
+        replies: ["Tja! Vad kan jag hjälpa dig med? 🙂"]
       });
     }
 
-    if (!state.problem) return res.json({ replies: ["Vad har hänt?"] });
-    if (!state.name) return res.json({ replies: ["Vad heter du?"] });
-    if (!state.phone) return res.json({ replies: ["Telefonnummer?"] });
-    if (!state.address) return res.json({ replies: ["Adress?"] });
-    if (!state.time) return res.json({ replies: ["När passar det?"] });
+    // safe user state init
+    if (!users[userId]) users[userId] = {};
+    let state = users[userId];
 
-    res.json({ replies: ["Berätta mer 🙂"] });
+    // spam protection
+    if (state.lastBooking && Date.now() - state.lastBooking < 60000) {
+      return res.json({
+        replies: ["Jag har redan lagt in det 👍 vi hör av oss"]
+      });
+    }
 
-  } catch {
-    res.json({ replies: ["Fel uppstod 🤔"] });
+    // AI extraction
+    const data = await aiExtract(raw);
+
+    // SAFE MERGE (never overwrite existing good data)
+    if (data.problem && !state.problem) state.problem = data.problem;
+    if (data.details && !state.details) state.details = data.details;
+    if (data.name && !state.name) state.name = capitalize(data.name);
+    if (data.phone && !state.phone && isValidPhone(data.phone)) {
+      state.phone = data.phone;
+    }
+    if (data.address && !state.address && isValidAddress(data.address)) {
+      state.address = capitalize(data.address);
+    }
+    if (data.time && !state.time) state.time = data.time;
+    if (data.urgency && !state.urgency) state.urgency = data.urgency;
+
+    // INSTANT BOOKING
+    if (
+      state.problem &&
+      state.name &&
+      state.phone &&
+      state.address &&
+      state.time
+    ) {
+      try {
+        fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
+      } catch (e) {
+        console.error("File write error:", e.message);
+      }
+
+      await sendBookingEmail(state);
+
+      state.lastBooking = Date.now();
+      users[userId] = { lastBooking: state.lastBooking };
+
+      return res.json({
+        replies: [
+          `Perfekt ${state.name} 👍`,
+          state.urgency === "high"
+            ? "Vi prioriterar detta direkt."
+            : "Vi hör av oss snart!"
+        ]
+      });
+    }
+
+    // GREETING
+    const greetings = ["hej","hejsan","hallå","tja","tjena","tjabba"];
+    if (!state.problem && greetings.includes(msg)) {
+      return res.json({
+        replies: ["Tja! Vad kan jag hjälpa dig med? 🙂"]
+      });
+    }
+
+    // FILTER
+    const plumbingKeywords = [
+      "stopp","avlopp","läcka","vatten",
+      "kran","toalett","rör","handfat","dusch","badkar"
+    ];
+
+    const isPlumbing = plumbingKeywords.some(w =>
+      (state.problem || "").toLowerCase().includes(w)
+    );
+
+    if (!isPlumbing && state.problem) {
+      return res.json({
+        replies: ["Jag hjälper bara med VVS 😄 gäller det stopp eller läcka?"]
+      });
+    }
+
+    // HUMAN RESPONSE
+    if (state.problem && !state.reacted) {
+      state.reacted = true;
+
+      return res.json({
+        replies: [
+          `Okej, ${state.problem} — det där löser vi 👍 Vad heter du?`
+        ]
+      });
+    }
+
+    // STEP FLOW
+    if (state.problem && !state.name) {
+      return res.json({ replies: ["Vad heter du?"] });
+    }
+
+    if (state.name && !state.phone) {
+      return res.json({
+        replies: [`Toppen ${state.name} 👍 vilket nummer når vi dig på?`]
+      });
+    }
+
+    if (state.phone && !state.address) {
+      return res.json({
+        replies: ["Vilken adress gäller det?"]
+      });
+    }
+
+    if (state.address && !state.time) {
+      return res.json({
+        replies: ["När passar det bäst?"]
+      });
+    }
+
+    return res.json({
+      replies: ["Berätta lite mer så löser vi det 👍"]
+    });
+
+  } catch (err) {
+    console.error("MAIN ERROR:", err.message);
+    return res.json({
+      replies: ["Nåt blev knas 🤔 testa igen"]
+    });
   }
 });
 
 // -------- AUTH --------
 
 function checkAuth(req) {
-  const auth = req.headers.authorization;
-  if (!auth) return false;
+  try {
+    const auth = req.headers.authorization;
+    if (!auth) return false;
 
-  const [user, pass] = Buffer.from(auth.split(" ")[1], "base64")
-    .toString()
-    .split(":");
+    const [user, pass] = Buffer.from(
+      auth.split(" ")[1],
+      "base64"
+    ).toString().split(":");
 
-  return user === process.env.DASH_USER && pass === process.env.DASH_PASS;
+    return (
+      user === process.env.DASH_USER &&
+      pass === process.env.DASH_PASS
+    );
+  } catch {
+    return false;
+  }
 }
 
 // -------- DASHBOARD --------
@@ -189,29 +289,65 @@ app.get("/dashboard", (req, res) => {
     return res.status(401).send("Login required");
   }
 
-  const data = fs.existsSync("bookings.txt")
-    ? fs.readFileSync("bookings.txt", "utf-8")
-    : "";
+  try {
+    if (!fs.existsSync("bookings.txt")) {
+      return res.send("<h2>Inga bokningar ännu</h2>");
+    }
 
-  const bookings = data.split("\n").filter(Boolean).map(JSON.parse);
+    const data = fs.readFileSync("bookings.txt", "utf-8");
 
-  let html = `<h1>Bokningar</h1><table border="1">`;
+    const bookings = data
+      .split("\n")
+      .filter(Boolean)
+      .map(line => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
 
-  bookings.reverse().forEach(b => {
-    html += `<tr>
-      <td>${b.name}</td>
-      <td>${b.problem}</td>
-      <td>${b.phone}</td>
-      <td>${b.address}</td>
-      <td>${b.time}</td>
-    </tr>`;
-  });
+    let html = `
+      <h1>📊 Bokningar</h1>
+      <table border="1" cellpadding="10">
+        <tr>
+          <th>Namn</th>
+          <th>Problem</th>
+          <th>Telefon</th>
+          <th>Adress</th>
+          <th>Tid</th>
+        </tr>
+    `;
 
-  html += "</table>";
-  res.send(html);
+    bookings.reverse().forEach(b => {
+      html += `
+        <tr>
+          <td>${b.name || "-"}</td>
+          <td>${b.problem || "-"}</td>
+          <td>${b.phone || "-"}</td>
+          <td>${b.address || "-"}</td>
+          <td>${b.time || "-"}</td>
+        </tr>
+      `;
+    });
+
+    html += "</table>";
+    res.send(html);
+
+  } catch {
+    res.send("Error loading dashboard");
+  }
 });
 
+// -------- BASIC ROUTES --------
+
+app.get("/", (req, res) => {
+  res.send("🔥 AI Rörmokare är igång");
+});
+
+app.get("/ping", (req, res) => res.send("OK"));
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🔥 RUNNING");
+  console.log("🔥 STABLE BOT RUNNING");
 });
