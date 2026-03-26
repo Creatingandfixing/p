@@ -164,7 +164,9 @@ function toggleChat() {
   let chat = document.getElementById("chat-widget");
   chat.style.display = chat.style.display === "none" ? "flex" : "none";
 }
-
+if (!document.getElementById("chat-box").hasChildNodes()) {
+  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
+}
 // Add message
 function addMessage(text, sender) {
   let box = document.getElementById("chat-box");
@@ -239,7 +241,7 @@ async function sendMessage() {
 
   try {
     // wake server
-    await fetch("https://ai-rormokare.onrender.com/ping");
+    afetch("https://ai-rormokare.onrender.com/ping");
 
     let res = await fetch("https://ai-rormokare.onrender.com/chat", {
       method: "POST",
