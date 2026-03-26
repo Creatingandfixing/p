@@ -280,7 +280,85 @@ app.post("/chat", async (req, res) => {
     });
   }
 });
+// -------- DASHBOARD --------
 
+app.get("/dashboard", (req, res) => {
+  try {
+    if (!fs.existsSync("bookings.txt")) {
+      return res.send("<h2>Inga bokningar ännu</h2>");
+    }
+
+    const data = fs.readFileSync("bookings.txt", "utf-8");
+
+    const bookings = data
+      .split("\n")
+      .filter(Boolean)
+      .map(line => JSON.parse(line));
+
+    let html = `
+      <html>
+      <head>
+        <title>Dashboard</title>
+        <style>
+          body { font-family: Arial; padding: 20px; background: #f5f5f5; }
+          h1 { margin-bottom: 20px; }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+          }
+          th, td {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+            text-align: left;
+          }
+          th {
+            background: #111;
+            color: white;
+          }
+          tr:hover {
+            background: #f9f9f9;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>📊 Bokningar</h1>
+        <table>
+          <tr>
+            <th>Namn</th>
+            <th>Problem</th>
+            <th>Telefon</th>
+            <th>Adress</th>
+            <th>Tid</th>
+          </tr>
+    `;
+
+    bookings.reverse().forEach(b => {
+      html += `
+        <tr>
+          <td>${b.name || "-"}</td>
+          <td>${b.problem || "-"}</td>
+          <td><a href="tel:${b.phone}">${b.phone}</a></td>
+          <td>${b.address || "-"}</td>
+          <td>${b.time || "-"}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+        </table>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+
+  } catch (err) {
+    res.send("Error loading dashboard");
+  }
+});
 // ping
 app.get("/ping", (req, res) => res.send("OK"));
 
