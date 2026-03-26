@@ -40,11 +40,9 @@ function isValidAddress(addr) {
 
 function safeParse(text) {
   try {
-    const cleaned = text
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
-    return JSON.parse(cleaned);
+    return JSON.parse(
+      text.replace(/```json/g, "").replace(/```/g, "").trim()
+    );
   } catch {
     return {};
   }
@@ -89,7 +87,7 @@ Detaljer: ${data.details || "-"}
 
 async function aiExtract(message) {
   const prompt = `
-Du analyserar ett kundmeddelande till en rörmokare.
+Analysera kundens meddelande till en rörmokare.
 
 Returnera ENDAST JSON:
 
@@ -136,18 +134,16 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // spam protection
+    // ✅ SPAM PROTECTION
     if (state.lastBooking && Date.now() - state.lastBooking < 60000) {
       return res.json({
         replies: ["Jag har redan lagt in det 👍 vi hör av oss"]
       });
     }
 
-    // AI extract
+    // ✅ AI EXTRACT
     const data = await aiExtract(raw);
-    console.log("AI DATA:", data);
 
-    // AUTO-SKIP (fills everything instantly if user writes full message)
     if (data.problem) state.problem = data.problem;
     if (data.details) state.details = data.details;
     if (data.name) state.name = capitalize(data.name);
@@ -156,69 +152,7 @@ app.post("/chat", async (req, res) => {
     if (data.time) state.time = data.time;
     if (data.urgency) state.urgency = data.urgency;
 
-    // greeting
-    if (!state.problem && msg.length < 10) {
-      return res.json({
-        replies: ["Tja! Vad kan jag hjälpa dig med? 🙂"]
-      });
-    }
-
-    // plumbing filter
-    const plumbingKeywords = [
-      "stopp", "avlopp", "läcka", "vatten",
-      "kran", "toalett", "rör", "handfat", "dusch", "badkar"
-    ];
-
-    const isPlumbing = plumbingKeywords.some(word =>
-      (state.problem || "").toLowerCase().includes(word)
-    );
-
-    if (!isPlumbing && state.problem) {
-      return res.json({
-        replies: [
-          "Jag kör bara VVS 😄 gäller det stopp, läcka eller nåt sånt?"
-        ]
-      });
-    }
-
-    // HUMAN REACTION (only once)
-    if (state.problem && !state.reacted) {
-      state.reacted = true;
-
-      return res.json({
-        replies: [
-          `Okej, ${state.problem} — klassiker 😅`
-        ]
-      });
-    }
-
-    // STEP FLOW (SMART + AUTO SKIP)
-
-    if (state.problem && !state.name) {
-      return res.json({
-        replies: ["Vad heter du?"]
-      });
-    }
-
-    if (state.name && !state.phone) {
-      return res.json({
-        replies: [`Snyggt ${state.name} 👍 har du ett nummer jag kan nå dig på?`]
-      });
-    }
-
-    if (state.phone && !state.address) {
-      return res.json({
-        replies: ["Perfekt, vilken adress gäller det?"]
-      });
-    }
-
-    if (state.address && !state.time) {
-      return res.json({
-        replies: ["När passar det för dig?"]
-      });
-    }
-
-    // COMPLETE BOOKING
+    // ✅ INSTANT BOOKING (FIRST PRIORITY)
     if (
       state.problem &&
       state.name &&
@@ -236,14 +170,107 @@ app.post("/chat", async (req, res) => {
       return res.json({
         replies: [
           `Perfekt ${state.name} 👍`,
-          "Jag har lagt in det, vi hör av oss"
+          state.urgency === "high"
+            ? "Vi prioriterar detta direkt, hör av oss inom kort."
+            : "Jag har lagt in det, vi hör av oss snart."
         ]
+      });
+    }
+
+    // ✅ GREETING
+    const greetings = [
+      "hej","hej hej","hejsan","hallå",
+      "tjena","tjenare","tja","tjabba",
+      "god morgon","god dag","god kväll"
+    ];
+
+    const howAreYou = [
+      "hur mår du","hur är läget","allt bra"
+    ];
+
+    const isGreeting =
+      greetings.includes(msg) ||
+      howAreYou.some(g => msg.includes(g));
+
+    if (!state.problem && isGreeting) {
+      const replies = [
+        "Tja! Vad kan jag hjälpa dig med? 🙂",
+        "Hallå! Vad verkar vara problemet?",
+        "Tjena! Vad har hänt?",
+        "Hej! Vad kan jag fixa åt dig?"
+      ];
+
+      return res.json({
+        replies: [replies[Math.floor(Math.random() * replies.length)]]
+      });
+    }
+
+    // ✅ FILTER (only plumbing)
+    const plumbingKeywords = [
+      "stopp","avlopp","läcka","vatten",
+      "kran","toalett","rör","handfat","dusch","badkar"
+    ];
+
+    const isPlumbing = plumbingKeywords.some(word =>
+      (state.problem || "").toLowerCase().includes(word)
+    );
+
+    if (!isPlumbing && state.problem) {
+      return res.json({
+        replies: ["Jag kör bara VVS 😄 gäller det stopp eller läcka?"]
+      });
+    }
+
+    // ✅ HUMAN REACTION + SMART NEXT STEP
+    if (state.problem && !state.reacted) {
+      state.reacted = true;
+
+      const urgencyText =
+        state.urgency === "high"
+          ? "det där vill man lösa snabbt 😅"
+          : "det där löser vi 👍";
+
+      let next = "Vad heter du?";
+
+      if (state.name && !state.phone) {
+        next = "Vilket nummer når vi dig på?";
+      } else if (state.phone && !state.address) {
+        next = "Vilken adress gäller det?";
+      } else if (state.address && !state.time) {
+        next = "När passar det bäst?";
+      }
+
+      return res.json({
+        replies: [`Okej, ${state.problem} — ${urgencyText} ${next}`]
+      });
+    }
+
+    // ✅ STEP FLOW
+    if (state.problem && !state.name) {
+      return res.json({ replies: ["Vad heter du?"] });
+    }
+
+    if (state.name && !state.phone) {
+      return res.json({
+        replies: [`Toppen ${state.name} 👍 vilket nummer når vi dig på?`]
+      });
+    }
+
+    if (state.phone && !state.address) {
+      return res.json({
+        replies: ["Bra, vilken adress gäller det?"]
+      });
+    }
+
+    if (state.address && !state.time) {
+      return res.json({
+        replies: ["När passar det bäst för dig?"]
       });
     }
 
     // fallback
     return res.json({
-      replies: ["Hmm, kan du skriva det igen så löser vi det 🙂"]
+      replies: ["Berätta lite mer så löser vi det 👍"]
     });
 
   } catch (err) {
