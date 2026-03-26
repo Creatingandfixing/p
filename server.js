@@ -280,9 +280,32 @@ app.post("/chat", async (req, res) => {
     });
   }
 });
+// -------- SIMPLE AUTH --------
+
+function checkAuth(req) {
+  const auth = req.headers.authorization;
+
+  if (!auth) return false;
+
+  const encoded = auth.split(" ")[1];
+  const decoded = Buffer.from(encoded, "base64").toString();
+
+  const [user, pass] = decoded.split(":");
+
+  return (
+    user === process.env.DASH_USER &&
+    pass === process.env.DASH_PASS
+  );
+}
 // -------- DASHBOARD --------
 
 app.get("/dashboard", (req, res) => {
+
+  if (!checkAuth(req)) {
+    res.setHeader("WWW-Authenticate", "Basic");
+    return res.status(401).send("Login required");
+  }
+
   try {
     if (!fs.existsSync("bookings.txt")) {
       return res.send("<h2>Inga bokningar ännu</h2>");
@@ -321,6 +344,10 @@ app.get("/dashboard", (req, res) => {
           tr:hover {
             background: #f9f9f9;
           }
+          a {
+            color: blue;
+            text-decoration: none;
+          }
         </style>
       </head>
       <body>
@@ -340,7 +367,7 @@ app.get("/dashboard", (req, res) => {
         <tr>
           <td>${b.name || "-"}</td>
           <td>${b.problem || "-"}</td>
-          <td><a href="tel:${b.phone}">${b.phone}</a></td>
+          <td><a href="tel:${b.phone}">${b.phone || "-"}</a></td>
           <td>${b.address || "-"}</td>
           <td>${b.time || "-"}</td>
         </tr>
