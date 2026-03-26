@@ -386,6 +386,13 @@ app.get("/dashboard", (req, res) => {
     res.send("Error loading dashboard");
   }
 });
+app.get("/", (req, res) => {
+  res.send(`
+    <h1>🔥 AI Rörmokare</h1>
+    <p>Systemet är igång</p>
+    <a href="/dashboard">Gå till dashboard</a>
+  `);
+});
 // ping
 app.get("/ping", (req, res) => res.send("OK"));
 
