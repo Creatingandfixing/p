@@ -50,7 +50,7 @@ function safeParse(text) {
   }
 }
 
-// -------- EMAIL (one.com) --------
+// -------- EMAIL --------
 
 const transporter = nodemailer.createTransport({
   host: "smtp.one.com",
@@ -119,44 +119,6 @@ Meddelande: "${message}"
   }
 }
 
-async function aiReply(state, message) {
-  const prompt = `
-Du är en erfaren rörmokare i Stockholm som chattar med kunder.
-
-Skriv som en riktig hantverkare:
-- Avslappnat, tryggt, lite "tja" vibe
-- Inte för formell
-- Inte för slangig
-
-Kund skrev: "${message}"
-
-Känd info:
-${JSON.stringify(state)}
-
-Regler:
-- Kort (1 mening, max 2)
-- Låt som en riktig person
-- Visa förståelse ("det där är klassiker", "låter inte kul")
-- Ställ EN relevant fråga
-- Upprepa inte dig
-- Om kunden säger "nej", gå vidare
-- Max 1 emoji
-`;
-
-  try {
-    const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.9,
-      max_tokens: 100,
-      messages: [{ role: "user", content: prompt }]
-    });
-
-    return res.choices[0].message.content;
-  } catch {
-    return "Hmm, skriv igen så löser vi det 🙂";
-  }
-}
-
 // -------- MAIN --------
 
 app.post("/chat", async (req, res) => {
@@ -181,10 +143,11 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // AI extraction
+    // AI extract
     const data = await aiExtract(raw);
     console.log("AI DATA:", data);
 
+    // AUTO-SKIP (fills everything instantly if user writes full message)
     if (data.problem) state.problem = data.problem;
     if (data.details) state.details = data.details;
     if (data.name) state.name = capitalize(data.name);
@@ -203,7 +166,7 @@ app.post("/chat", async (req, res) => {
     // plumbing filter
     const plumbingKeywords = [
       "stopp", "avlopp", "läcka", "vatten",
-      "kran", "toalett", "rör", "handfat", "dusch"
+      "kran", "toalett", "rör", "handfat", "dusch", "badkar"
     ];
 
     const isPlumbing = plumbingKeywords.some(word =>
@@ -218,54 +181,40 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // first reaction (human feel)
+    // HUMAN REACTION (only once)
     if (state.problem && !state.reacted) {
       state.reacted = true;
 
       return res.json({
         replies: [
-          `Okej, ${state.problem} — klassiker 😅 Vad heter du?`
+          `Okej, ${state.problem} — klassiker 😅`
         ]
       });
     }
 
-    // handle "nej"
-    if (msg === "nej") {
+    // STEP FLOW (SMART + AUTO SKIP)
 
-  if (!state.name) {
-    return res.json({
-      replies: ["Okej 👍 vad heter du då?"]
-    });
-  }
-
-  if (!state.phone) {
-    return res.json({
-      replies: ["Har du ett nummer jag kan nå dig på?"]
-    });
-  }
-
-  if (!state.address) {
-    return res.json({
-      replies: ["Vilken adress gäller det?"]
-    });
-  }
-
-  if (!state.time) {
-    return res.json({
-      replies: ["När passar det för dig?"]
-    });
-  }
-
-  return res.json({
-    replies: ["Toppen 👍 då kör vi på det"]
-  });
-}
-
-    // fallback if no problem
-    if (!state.problem) {
-      const reply = await aiReply(state, raw);
+    if (state.problem && !state.name) {
       return res.json({
-        replies: [reply]
+        replies: ["Vad heter du?"]
+      });
+    }
+
+    if (state.name && !state.phone) {
+      return res.json({
+        replies: [`Snyggt ${state.name} 👍 har du ett nummer jag kan nå dig på?`]
+      });
+    }
+
+    if (state.phone && !state.address) {
+      return res.json({
+        replies: ["Perfekt, vilken adress gäller det?"]
+      });
+    }
+
+    if (state.address && !state.time) {
+      return res.json({
+        replies: ["När passar det för dig?"]
       });
     }
 
@@ -292,11 +241,9 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // AI follow-up
-    const reply = await aiReply(state, raw);
-
+    // fallback
     return res.json({
-      replies: [reply]
+      replies: ["Hmm, kan du skriva det igen så löser vi det 🙂"]
     });
 
   } catch (err) {
@@ -311,5 +258,5 @@ app.post("/chat", async (req, res) => {
 app.get("/ping", (req, res) => res.send("OK"));
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🔥 STOCKHOLM AI BOT RUNNING");
+  console.log("🔥 FINAL AI BOT RUNNING");
 });
