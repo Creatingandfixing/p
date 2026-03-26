@@ -6,10 +6,12 @@ import cors from "cors";
 import fs from "fs";
 import OpenAI from "openai";
 import nodemailer from "nodemailer";
+import path from "path";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.static("public")); // 👈 serve frontend
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -64,18 +66,14 @@ async function sendBookingEmail(data) {
   try {
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
-      to: process.env.BOOKING_EMAIL,
+      to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
       subject: "🚨 Ny VVS Bokning",
       text: `
-🚨 Ny bokning
-
 Problem: ${data.problem}
-Detaljer: ${data.details || "-"}
-
-👤 ${data.name}
-📞 ${data.phone}
-📍 ${data.address}
-⏰ ${data.time}
+Namn: ${data.name}
+Telefon: ${data.phone}
+Adress: ${data.address}
+Tid: ${data.time}
       `
     });
   } catch (err) {
@@ -117,7 +115,7 @@ Meddelande: "${message}"
   }
 }
 
-// -------- MAIN --------
+// -------- CHAT --------
 
 app.post("/chat", async (req, res) => {
   try {
@@ -126,276 +124,99 @@ app.post("/chat", async (req, res) => {
     const userId = req.body.userId || Math.random().toString(36);
 
     if (!msg) {
-      return res.json({
-        replies: ["Tja! Vad kan jag hjälpa dig med? 🙂"]
-      });
+      return res.json({ replies: ["Tja! Vad kan jag hjälpa dig med? 🙂"] });
     }
 
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // ✅ SPAM PROTECTION
     if (state.lastBooking && Date.now() - state.lastBooking < 60000) {
-      return res.json({
-        replies: ["Jag har redan lagt in det 👍 vi hör av oss"]
-      });
+      return res.json({ replies: ["Jag har redan lagt in det 👍"] });
     }
 
-    // ✅ AI EXTRACT
     const data = await aiExtract(raw);
 
-    if (data.problem) state.problem = data.problem;
-    if (data.details) state.details = data.details;
-    if (data.name) state.name = capitalize(data.name);
+    if (data.problem && !state.problem) state.problem = data.problem;
+    if (data.name && !state.name) state.name = capitalize(data.name);
     if (data.phone && isValidPhone(data.phone)) state.phone = data.phone;
     if (data.address && isValidAddress(data.address)) state.address = capitalize(data.address);
     if (data.time) state.time = data.time;
-    if (data.urgency) state.urgency = data.urgency;
 
-    // ✅ INSTANT BOOKING (FIRST PRIORITY)
-    if (
-      state.problem &&
-      state.name &&
-      state.phone &&
-      state.address &&
-      state.time
-    ) {
+    // BOOKING
+    if (state.problem && state.name && state.phone && state.address && state.time) {
       fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
-
       await sendBookingEmail(state);
 
       state.lastBooking = Date.now();
       users[userId] = {};
 
       return res.json({
-        replies: [
-          `Perfekt ${state.name} 👍`,
-          state.urgency === "high"
-            ? "Vi prioriterar detta direkt, hör av oss inom kort."
-            : "Jag har lagt in det, vi hör av oss snart."
-        ]
+        replies: [`Perfekt ${state.name} 👍`, "Vi hör av oss snart!"]
       });
     }
 
-    // ✅ GREETING
-    const greetings = [
-      "hej","hej hej","hejsan","hallå",
-      "tjena","tjenare","tja","tjabba",
-      "god morgon","god dag","god kväll"
-    ];
+    if (!state.problem) return res.json({ replies: ["Vad har hänt?"] });
+    if (!state.name) return res.json({ replies: ["Vad heter du?"] });
+    if (!state.phone) return res.json({ replies: ["Telefonnummer?"] });
+    if (!state.address) return res.json({ replies: ["Adress?"] });
+    if (!state.time) return res.json({ replies: ["När passar det?"] });
 
-    const howAreYou = [
-      "hur mår du","hur är läget","allt bra"
-    ];
+    res.json({ replies: ["Berätta mer 🙂"] });
 
-    const isGreeting =
-      greetings.includes(msg) ||
-      howAreYou.some(g => msg.includes(g));
-
-    if (!state.problem && isGreeting) {
-      const replies = [
-        "Tja! Vad kan jag hjälpa dig med? 🙂",
-        "Hallå! Vad verkar vara problemet?",
-        "Tjena! Vad har hänt?",
-        "Hej! Vad kan jag fixa åt dig?"
-      ];
-
-      return res.json({
-        replies: [replies[Math.floor(Math.random() * replies.length)]]
-      });
-    }
-
-    // ✅ FILTER (only plumbing)
-    const plumbingKeywords = [
-      "stopp","avlopp","läcka","vatten",
-      "kran","toalett","rör","handfat","dusch","badkar"
-    ];
-
-    const isPlumbing = plumbingKeywords.some(word =>
-      (state.problem || "").toLowerCase().includes(word)
-    );
-
-    if (!isPlumbing && state.problem) {
-      return res.json({
-        replies: ["Jag kör bara VVS 😄 gäller det stopp eller läcka?"]
-      });
-    }
-
-    // ✅ HUMAN REACTION + SMART NEXT STEP
-    if (state.problem && !state.reacted) {
-      state.reacted = true;
-
-      const urgencyText =
-        state.urgency === "high"
-          ? "det där vill man lösa snabbt 😅"
-          : "det där löser vi 👍";
-
-      let next = "Vad heter du?";
-
-      if (state.name && !state.phone) {
-        next = "Vilket nummer når vi dig på?";
-      } else if (state.phone && !state.address) {
-        next = "Vilken adress gäller det?";
-      } else if (state.address && !state.time) {
-        next = "När passar det bäst?";
-      }
-
-      return res.json({
-        replies: [`Okej, ${state.problem} — ${urgencyText} ${next}`]
-      });
-    }
-
-    // ✅ STEP FLOW
-    if (state.problem && !state.name) {
-      return res.json({ replies: ["Vad heter du?"] });
-    }
-
-    if (state.name && !state.phone) {
-      return res.json({
-        replies: [`Toppen ${state.name} 👍 vilket nummer når vi dig på?`]
-      });
-    }
-
-    if (state.phone && !state.address) {
-      return res.json({
-        replies: ["Bra, vilken adress gäller det?"]
-      });
-    }
-
-    if (state.address && !state.time) {
-      return res.json({
-        replies: ["När passar det bäst för dig?"]
-      });
-    }
-
-    // fallback
-    return res.json({
-      replies: ["Berätta lite mer så löser vi det 👍"]
-    });
-
-  } catch (err) {
-    console.error(err);
-    return res.json({
-      replies: ["Nåt blev knas 🤔 testa igen"]
-    });
+  } catch {
+    res.json({ replies: ["Fel uppstod 🤔"] });
   }
 });
-// -------- SIMPLE AUTH --------
+
+// -------- AUTH --------
 
 function checkAuth(req) {
   const auth = req.headers.authorization;
-
   if (!auth) return false;
 
-  const encoded = auth.split(" ")[1];
-  const decoded = Buffer.from(encoded, "base64").toString();
+  const [user, pass] = Buffer.from(auth.split(" ")[1], "base64")
+    .toString()
+    .split(":");
 
-  const [user, pass] = decoded.split(":");
-
-  return (
-    user === process.env.DASH_USER &&
-    pass === process.env.DASH_PASS
-  );
+  return user === process.env.DASH_USER && pass === process.env.DASH_PASS;
 }
+
 // -------- DASHBOARD --------
 
 app.get("/dashboard", (req, res) => {
-
   if (!checkAuth(req)) {
     res.setHeader("WWW-Authenticate", "Basic");
     return res.status(401).send("Login required");
   }
 
-  try {
-    if (!fs.existsSync("bookings.txt")) {
-      return res.send("<h2>Inga bokningar ännu</h2>");
-    }
+  const data = fs.existsSync("bookings.txt")
+    ? fs.readFileSync("bookings.txt", "utf-8")
+    : "";
 
-    const data = fs.readFileSync("bookings.txt", "utf-8");
+  const bookings = data.split("\n").filter(Boolean).map(JSON.parse);
 
-    const bookings = data
-      .split("\n")
-      .filter(Boolean)
-      .map(line => JSON.parse(line));
+  let html = `<h1>Bokningar</h1><table border="1">`;
 
-    let html = `
-      <html>
-      <head>
-        <title>Dashboard</title>
-        <style>
-          body { font-family: Arial; padding: 20px; background: #f5f5f5; }
-          h1 { margin-bottom: 20px; }
-          table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            border-radius: 10px;
-            overflow: hidden;
-          }
-          th, td {
-            padding: 12px;
-            border-bottom: 1px solid #eee;
-            text-align: left;
-          }
-          th {
-            background: #111;
-            color: white;
-          }
-          tr:hover {
-            background: #f9f9f9;
-          }
-          a {
-            color: blue;
-            text-decoration: none;
-          }
-        </style>
-      </head>
-      <body>
-        <h1>📊 Bokningar</h1>
-        <table>
-          <tr>
-            <th>Namn</th>
-            <th>Problem</th>
-            <th>Telefon</th>
-            <th>Adress</th>
-            <th>Tid</th>
-          </tr>
-    `;
+  bookings.reverse().forEach(b => {
+    html += `<tr>
+      <td>${b.name}</td>
+      <td>${b.problem}</td>
+      <td>${b.phone}</td>
+      <td>${b.address}</td>
+      <td>${b.time}</td>
+    </tr>`;
+  });
 
-    bookings.reverse().forEach(b => {
-      html += `
-        <tr>
-          <td>${b.name || "-"}</td>
-          <td>${b.problem || "-"}</td>
-          <td><a href="tel:${b.phone}">${b.phone || "-"}</a></td>
-          <td>${b.address || "-"}</td>
-          <td>${b.time || "-"}</td>
-        </tr>
-      `;
-    });
-
-    html += `
-        </table>
-      </body>
-      </html>
-    `;
-
-    res.send(html);
-
-  } catch (err) {
-    res.send("Error loading dashboard");
-  }
+  html += "</table>";
+  res.send(html);
 });
+
+// -------- FRONTEND --------
+
 app.get("/", (req, res) => {
-  res.send(`
-    <h1>🔥 AI Rörmokare</h1>
-    <p>Systemet är igång</p>
-    <a href="/dashboard">Gå till dashboard</a>
-  `);
+  res.sendFile(process.cwd() + "/public/index.html");
 });
-// ping
-app.get("/ping", (req, res) => res.send("OK"));
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🔥 FINAL AI BOT RUNNING");
+  console.log("🔥 RUNNING");
 });
