@@ -131,8 +131,9 @@ ${JSON.stringify(state)}
 
 Regler:
 - Kort svar (1 mening)
-- Låter mänsklig
+- Låter naturlig
 - Ställ fråga om något saknas
+- Om kunden säger "nej", gå vidare istället för att fråga igen
 - Max 1 emoji
 `;
 
