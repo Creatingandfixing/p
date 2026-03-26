@@ -114,15 +114,19 @@ Meddelande: "${message}"
     });
 
     return safeParse(res.choices[0].message.content);
-  } catch (err) {
-    console.error("AI extract error:", err);
+  } catch {
     return {};
   }
 }
 
 async function aiReply(state, message) {
   const prompt = `
-Du är en trevlig svensk rörmokar-assistent.
+Du är en erfaren rörmokare i Stockholm som chattar med kunder.
+
+Skriv som en riktig hantverkare:
+- Avslappnat, tryggt, lite "tja" vibe
+- Inte för formell
+- Inte för slangig
 
 Kund skrev: "${message}"
 
@@ -130,24 +134,26 @@ Känd info:
 ${JSON.stringify(state)}
 
 Regler:
-- Kort svar (1 mening)
-- Låter naturlig
-- Ställ fråga om något saknas
-- Om kunden säger "nej", gå vidare istället för att fråga igen
+- Kort (1 mening, max 2)
+- Låt som en riktig person
+- Visa förståelse ("det där är klassiker", "låter inte kul")
+- Ställ EN relevant fråga
+- Upprepa inte dig
+- Om kunden säger "nej", gå vidare
 - Max 1 emoji
 `;
 
   try {
     const res = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.7,
-      max_tokens: 80,
+      temperature: 0.9,
+      max_tokens: 100,
       messages: [{ role: "user", content: prompt }]
     });
 
     return res.choices[0].message.content;
   } catch {
-    return "Kan du skriva det igen? 🙂";
+    return "Hmm, skriv igen så löser vi det 🙂";
   }
 }
 
@@ -161,21 +167,21 @@ app.post("/chat", async (req, res) => {
 
     if (!msg) {
       return res.json({
-        replies: ["Hej! Vad kan jag hjälpa dig med? 🙂"]
+        replies: ["Tja! Vad kan jag hjälpa dig med? 🙂"]
       });
     }
 
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // prevent spam bookings
+    // spam protection
     if (state.lastBooking && Date.now() - state.lastBooking < 60000) {
       return res.json({
-        replies: ["Vi har redan registrerat din bokning 👍"]
+        replies: ["Jag har redan lagt in det 👍 vi hör av oss"]
       });
     }
 
-    // AI extract
+    // AI extraction
     const data = await aiExtract(raw);
     console.log("AI DATA:", data);
 
@@ -187,10 +193,10 @@ app.post("/chat", async (req, res) => {
     if (data.time) state.time = data.time;
     if (data.urgency) state.urgency = data.urgency;
 
-    // greeting handling
+    // greeting
     if (!state.problem && msg.length < 10) {
       return res.json({
-        replies: ["Hej! Vad kan jag hjälpa dig med? 🙂"]
+        replies: ["Tja! Vad kan jag hjälpa dig med? 🙂"]
       });
     }
 
@@ -207,12 +213,29 @@ app.post("/chat", async (req, res) => {
     if (!isPlumbing && state.problem) {
       return res.json({
         replies: [
-          "Jag hjälper med VVS-problem 😊 Gäller det t.ex. stopp, läckage eller kran?"
+          "Jag kör bara VVS 😄 gäller det stopp, läcka eller nåt sånt?"
         ]
       });
     }
 
-    // fallback if still no problem
+    // first reaction (human feel)
+    if (state.problem && !state.reacted) {
+      state.reacted = true;
+
+      return res.json({
+        replies: [
+          `Okej, ${state.problem} — klassiker 😅 Vad heter du?`
+        ]
+      });
+    }
+
+    // handle "nej"
+    if (msg === "nej") {
+      const reply = await aiReply(state, "kunden sa nej, gå vidare");
+      return res.json({ replies: [reply] });
+    }
+
+    // fallback if no problem
     if (!state.problem) {
       const reply = await aiReply(state, raw);
       return res.json({
@@ -237,11 +260,8 @@ app.post("/chat", async (req, res) => {
 
       return res.json({
         replies: [
-          `Tack ${state.name}! 🙌`,
-          "Din bokning är registrerad",
-          state.urgency === "high"
-            ? "Vi prioriterar detta direkt."
-            : "Vi hör av oss snart!"
+          `Perfekt ${state.name} 👍`,
+          "Jag har lagt in det, vi hör av oss"
         ]
       });
     }
@@ -254,9 +274,9 @@ app.post("/chat", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("MAIN ERROR:", err);
+    console.error(err);
     return res.json({
-      replies: ["Något gick fel 🤔"]
+      replies: ["Nåt blev knas 🤔 testa igen"]
     });
   }
 });
@@ -265,5 +285,5 @@ app.post("/chat", async (req, res) => {
 app.get("/ping", (req, res) => res.send("OK"));
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🔥 AI BOOKING BOT RUNNING");
+  console.log("🔥 STOCKHOLM AI BOT RUNNING");
 });
