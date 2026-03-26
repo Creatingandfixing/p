@@ -38,8 +38,6 @@ function isValidAddress(addr) {
   return addr && addr.length > 4 && addr.match(/\d/);
 }
 
-// -------- SAFE JSON PARSE --------
-
 function safeParse(text) {
   try {
     const cleaned = text
@@ -52,7 +50,7 @@ function safeParse(text) {
   }
 }
 
-// -------- EMAIL SETUP (one.com) --------
+// -------- EMAIL (one.com) --------
 
 const transporter = nodemailer.createTransport({
   host: "smtp.one.com",
@@ -63,8 +61,6 @@ const transporter = nodemailer.createTransport({
     pass: process.env.EMAIL_PASS
   }
 });
-
-// -------- SEND EMAIL --------
 
 async function sendBookingEmail(data) {
   try {
@@ -89,13 +85,14 @@ Detaljer: ${data.details || "-"}
   }
 }
 
-// -------- AI EXTRACTION --------
+// -------- AI --------
 
 async function aiExtract(message) {
   const prompt = `
-Extract info from this Swedish plumbing request.
+Du analyserar ett kundmeddelande till en rörmokare.
 
-Return JSON only:
+Returnera ENDAST JSON:
+
 {
   "problem": "",
   "details": "",
@@ -106,40 +103,36 @@ Return JSON only:
   "time": ""
 }
 
-Message: "${message}"
+Meddelande: "${message}"
 `;
 
   try {
     const res = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.2,
+      temperature: 0.3,
       messages: [{ role: "user", content: prompt }]
     });
 
     return safeParse(res.choices[0].message.content);
-
   } catch (err) {
     console.error("AI extract error:", err);
     return {};
   }
 }
 
-// -------- AI RESPONSE --------
-
 async function aiReply(state, message) {
   const prompt = `
-You are a friendly Swedish plumbing assistant.
+Du är en trevlig svensk rörmokar-assistent.
 
-Customer said: "${message}"
+Kund skrev: "${message}"
 
-Known info:
+Känd info:
 ${JSON.stringify(state)}
 
-Rules:
-- Natural Swedish
-- Short (1 sentence)
-- Ask for missing info
-- If urgent → sound faster
+Regler:
+- Kort svar (1 mening)
+- Låter mänsklig
+- Ställ fråga om något saknas
 - Max 1 emoji
 `;
 
@@ -152,9 +145,7 @@ Rules:
     });
 
     return res.choices[0].message.content;
-
-  } catch (err) {
-    console.error("AI reply error:", err);
+  } catch {
     return "Kan du skriva det igen? 🙂";
   }
 }
@@ -169,22 +160,23 @@ app.post("/chat", async (req, res) => {
 
     if (!msg) {
       return res.json({
-        replies: ["Jag är kvar här 🙂 Vad behöver du hjälp med?"]
+        replies: ["Hej! Vad kan jag hjälpa dig med? 🙂"]
       });
     }
 
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // spam protection
+    // prevent spam bookings
     if (state.lastBooking && Date.now() - state.lastBooking < 60000) {
       return res.json({
         replies: ["Vi har redan registrerat din bokning 👍"]
       });
     }
 
-    // AI extraction
+    // AI extract
     const data = await aiExtract(raw);
+    console.log("AI DATA:", data);
 
     if (data.problem) state.problem = data.problem;
     if (data.details) state.details = data.details;
@@ -194,10 +186,36 @@ app.post("/chat", async (req, res) => {
     if (data.time) state.time = data.time;
     if (data.urgency) state.urgency = data.urgency;
 
-    // fallback if no problem
-    if (!state.problem) {
+    // greeting handling
+    if (!state.problem && msg.length < 10) {
       return res.json({
-        replies: ["Kan du beskriva problemet lite kort?"]
+        replies: ["Hej! Vad kan jag hjälpa dig med? 🙂"]
+      });
+    }
+
+    // plumbing filter
+    const plumbingKeywords = [
+      "stopp", "avlopp", "läcka", "vatten",
+      "kran", "toalett", "rör", "handfat", "dusch"
+    ];
+
+    const isPlumbing = plumbingKeywords.some(word =>
+      (state.problem || "").toLowerCase().includes(word)
+    );
+
+    if (!isPlumbing && state.problem) {
+      return res.json({
+        replies: [
+          "Jag hjälper med VVS-problem 😊 Gäller det t.ex. stopp, läckage eller kran?"
+        ]
+      });
+    }
+
+    // fallback if still no problem
+    if (!state.problem) {
+      const reply = await aiReply(state, raw);
+      return res.json({
+        replies: [reply]
       });
     }
 
@@ -209,7 +227,6 @@ app.post("/chat", async (req, res) => {
       state.address &&
       state.time
     ) {
-
       fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
 
       await sendBookingEmail(state);
@@ -238,7 +255,7 @@ app.post("/chat", async (req, res) => {
   } catch (err) {
     console.error("MAIN ERROR:", err);
     return res.json({
-      replies: ["Något gick fel 🤔 Försök igen."]
+      replies: ["Något gick fel 🤔"]
     });
   }
 });
