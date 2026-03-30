@@ -8,7 +8,6 @@
       font-family: Arial, sans-serif;
     }
 
-    /* Chat button */
     #chat-button {
       position: fixed;
       bottom: 20px;
@@ -24,7 +23,6 @@
       box-shadow: 0 4px 15px rgba(0,0,0,0.3);
     }
 
-    /* Chat widget */
     #chat-widget {
       display: none;
       position: fixed;
@@ -39,7 +37,6 @@
       flex-direction: column;
     }
 
-    /* Header */
     #chat-header {
       background: #0a7cff;
       color: white;
@@ -47,7 +44,6 @@
       font-weight: bold;
     }
 
-    /* Chat area */
     #chat-box {
       flex: 1;
       padding: 10px;
@@ -57,7 +53,6 @@
       flex-direction: column;
     }
 
-    /* Messages */
     .msg {
       padding: 8px 12px;
       border-radius: 12px;
@@ -77,7 +72,6 @@
       align-self: flex-start;
     }
 
-    /* Typing animation */
     .typing {
       display: flex;
       gap: 5px;
@@ -85,7 +79,6 @@
       background: #e4e6eb;
       border-radius: 12px;
       width: fit-content;
-      margin: 5px 0;
     }
 
     .dot {
@@ -105,7 +98,6 @@
       100% { opacity: 0.2; }
     }
 
-    /* Input area */
     #chat-input-area {
       display: flex;
       border-top: 1px solid #ddd;
@@ -125,50 +117,54 @@
       padding: 12px;
       cursor: pointer;
     }
-
   </style>
 </head>
 
 <body>
 
 <h1>Johanneshovrör</h1>
-<p>Välkommen! Vi hjälper Dig med VVS-arbeten.</p>
+<p>Välkommen! Vi hjälper dig med VVS.</p>
 
-<!-- Chat button -->
 <button id="chat-button" onclick="toggleChat()">💬</button>
 
-<!-- Chat widget -->
 <div id="chat-widget">
-
-  <div id="chat-header">
-    Johanneshovrör Support
-  </div>
-
+  <div id="chat-header">Johanneshovrör Support</div>
   <div id="chat-box"></div>
 
   <div id="chat-input-area">
     <input id="chat-input" placeholder="Skriv meddelande...">
     <button id="send-btn" onclick="sendMessage()">➤</button>
   </div>
-
 </div>
 
 <script>
 
+// -------- USER --------
 const userId = localStorage.getItem("userId") || crypto.randomUUID();
 localStorage.setItem("userId", userId);
 
+// -------- CHAT HISTORY --------
+function loadHistory() {
+  let history = JSON.parse(localStorage.getItem("chatHistory") || "[]");
 
-// Toggle chat
+  history.forEach(msg => {
+    addMessage(msg.text, msg.sender, false);
+  });
+}
+
+function saveMessage(text, sender) {
+  let history = JSON.parse(localStorage.getItem("chatHistory") || "[]");
+  history.push({ text, sender });
+  localStorage.setItem("chatHistory", JSON.stringify(history));
+}
+
+// -------- UI --------
 function toggleChat() {
   let chat = document.getElementById("chat-widget");
   chat.style.display = chat.style.display === "none" ? "flex" : "none";
 }
-if (!document.getElementById("chat-box").hasChildNodes()) {
-  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
-}
-// Add message
-function addMessage(text, sender) {
+
+function addMessage(text, sender, save = true) {
   let box = document.getElementById("chat-box");
 
   let div = document.createElement("div");
@@ -177,9 +173,11 @@ function addMessage(text, sender) {
 
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
+
+  if (save) saveMessage(text, sender);
 }
 
-// Typing indicator
+// -------- TYPING --------
 function showTyping() {
   let box = document.getElementById("chat-box");
 
@@ -202,46 +200,33 @@ function removeTyping() {
   if (typing) typing.remove();
 }
 
-// Show replies like WhatsApp
+// -------- SHOW REPLIES --------
 async function showReplies(replies) {
-  for (let i = 0; i < replies.length; i++) {
-
+  for (let msg of replies) {
     showTyping();
-
-    await new Promise(resolve => setTimeout(resolve, 700));
-
+    await new Promise(r => setTimeout(r, 600));
     removeTyping();
-
-    addMessage(replies[i], "bot");
-
-    await new Promise(resolve => setTimeout(resolve, 300));
+    addMessage(msg, "bot");
   }
 }
 
-// Send message
-let isSending = false; // ADD THIS at top of your script
+// -------- SEND --------
+let isSending = false;
 
 async function sendMessage() {
   let input = document.getElementById("chat-input");
-  let msg = input.value;
+  let msg = input.value.trim();
 
-  if (!msg) return;
+  if (!msg || isSending) return;
 
-  // 🚫 prevent spam clicking
-  if (isSending) return;
   isSending = true;
 
   addMessage(msg, "user");
   input.value = "";
 
-  // ⏳ only show typing if slow
-  let typingTimeout = setTimeout(() => {
-    showTyping();
-  }, 800);
-
   try {
-    // wake server
-    afetch("https://ai-rormokare.onrender.com/ping");
+    // wake backend silently
+    fetch("https://ai-rormokare.onrender.com/ping").catch(()=>{});
 
     let res = await fetch("https://ai-rormokare.onrender.com/chat", {
       method: "POST",
@@ -255,30 +240,31 @@ async function sendMessage() {
     });
 
     let data = await res.json();
-
-    clearTimeout(typingTimeout);
-    removeTyping();
-
     await showReplies(data.replies);
 
   } catch (err) {
-    clearTimeout(typingTimeout);
-    removeTyping();
+    // ❌ NO ugly error message anymore
+    addMessage("Hmm... något gick fel, testar igen...", "bot");
 
-    addMessage("⏳ Servern startar... försök igen om några sekunder", "bot");
+    setTimeout(() => {
+      sendMessage(); // auto retry
+    }, 2000);
   }
 
-  // ✅ allow sending again
   isSending = false;
-
-  // ✅ focus input again (nice UX)
-  input.focus();
 }
 
-// Enter key
-document.getElementById("chat-input").addEventListener("keypress", function(e) {
+// enter key
+document.getElementById("chat-input").addEventListener("keypress", e => {
   if (e.key === "Enter") sendMessage();
 });
+
+// -------- INIT --------
+loadHistory();
+
+if (!localStorage.getItem("chatHistory")) {
+  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
+}
 
 </script>
 
