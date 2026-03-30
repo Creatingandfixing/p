@@ -41,13 +41,53 @@ function isValidAddress(addr) {
 
 function safeParse(text) {
   try {
-    if (!text || typeof text !== "string") return {};
+    if (!text) return {};
     return JSON.parse(
       text.replace(/```json/g, "").replace(/```/g, "").trim()
     );
   } catch {
     return {};
   }
+}
+
+// -------- INDUSTRY LOGIC --------
+
+function getProblemType(problem = "") {
+  problem = problem.toLowerCase();
+
+  if (problem.includes("stopp") || problem.includes("avlopp")) return "stopp";
+  if (problem.includes("läcka") || problem.includes("dropp")) return "leak";
+  if (problem.includes("ingen vatten") || problem.includes("kommer inget")) return "no_water";
+  if (problem.includes("lukt")) return "smell";
+
+  return "other";
+}
+
+function getFollowUpQuestion(type) {
+  const questions = {
+    stopp: [
+      "är det helt stopp eller rinner det undan lite?",
+      "gäller det kök, badrum eller golvbrunn?"
+    ],
+    leak: [
+      "var läcker det någonstans?",
+      "är det mycket vatten eller bara dropp?"
+    ],
+    no_water: [
+      "gäller det hela bostaden eller bara en kran?",
+      "slutade det plötsligt eller har det varit så ett tag?"
+    ],
+    smell: [
+      "kommer lukten från avloppet?",
+      "har det varit stopp nyligen?"
+    ],
+    other: [
+      "kan du beskriva lite mer exakt vad som händer?"
+    ]
+  };
+
+  const list = questions[type] || questions.other;
+  return list[Math.floor(Math.random() * list.length)];
 }
 
 // -------- EMAIL --------
@@ -64,6 +104,8 @@ const transporter = nodemailer.createTransport({
 
 async function sendBookingEmail(data) {
   try {
+    console.log("Sending email to:", process.env.BOOKING_EMAIL);
+
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
@@ -134,21 +176,20 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // safe user state init
+    // SAFE STATE INIT
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // spam protection
+    // SPAM PROTECTION
     if (state.lastBooking && Date.now() - state.lastBooking < 60000) {
       return res.json({
         replies: ["Jag har redan lagt in det 👍 vi hör av oss"]
       });
     }
 
-    // AI extraction
+    // AI EXTRACTION
     const data = await aiExtract(raw);
 
-    // SAFE MERGE (never overwrite existing good data)
     if (data.problem && !state.problem) state.problem = data.problem;
     if (data.details && !state.details) state.details = data.details;
     if (data.name && !state.name) state.name = capitalize(data.name);
@@ -171,13 +212,13 @@ app.post("/chat", async (req, res) => {
     ) {
       try {
         fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
-      } catch (e) {
-        console.error("File write error:", e.message);
-      }
+      } catch {}
 
       await sendBookingEmail(state);
 
       state.lastBooking = Date.now();
+
+      // ✅ FIXED (KEEP STATE SAFE)
       users[userId] = { lastBooking: state.lastBooking };
 
       return res.json({
@@ -214,18 +255,19 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // HUMAN RESPONSE
-    if (state.problem && !state.reacted) {
-      state.reacted = true;
+    // INDUSTRY QUESTION
+    if (state.problem && !state.deepAsked) {
+      state.deepAsked = true;
+
+      const type = getProblemType(state.problem);
+      const question = getFollowUpQuestion(type);
 
       return res.json({
-        replies: [
-          `Okej, ${state.problem} — det där löser vi 👍 Vad heter du?`
-        ]
+        replies: [`Okej, ${state.problem} — ${question}`]
       });
     }
 
-    // STEP FLOW
+    // FLOW
     if (state.problem && !state.name) {
       return res.json({ replies: ["Vad heter du?"] });
     }
@@ -340,7 +382,7 @@ app.get("/dashboard", (req, res) => {
   }
 });
 
-// -------- BASIC ROUTES --------
+// -------- BASIC --------
 
 app.get("/", (req, res) => {
   res.send("🔥 AI Rörmokare är igång");
@@ -349,5 +391,5 @@ app.get("/", (req, res) => {
 app.get("/ping", (req, res) => res.send("OK"));
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🔥 STABLE BOT RUNNING");
+  console.log("🔥 INDUSTRY AI RUNNING");
 });
