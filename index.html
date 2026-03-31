@@ -21,6 +21,26 @@
       border: none;
       cursor: pointer;
       box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+      z-index: 10;
+    }
+
+    /* 💬 Bubble hint */
+    #chat-hint {
+      position: fixed;
+      bottom: 90px;
+      right: 20px;
+      background: white;
+      padding: 10px 14px;
+      border-radius: 12px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+      font-size: 13px;
+      cursor: pointer;
+      animation: fadeIn 0.5s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
     }
 
     #chat-widget {
@@ -42,6 +62,11 @@
       color: white;
       padding: 12px;
       font-weight: bold;
+    }
+
+    #chat-header span {
+      float: right;
+      cursor: pointer;
     }
 
     #chat-box {
@@ -78,7 +103,7 @@
       padding: 8px 12px;
       background: #e4e6eb;
       border-radius: 12px;
-      width: fit-content;
+      margin: 5px 0;
     }
 
     .dot {
@@ -125,10 +150,20 @@
 <h1>Johanneshovrör</h1>
 <p>Välkommen! Vi hjälper dig med VVS.</p>
 
+<!-- 💬 hint -->
+<div id="chat-hint" onclick="openChat()">
+  Behöver du hjälp? Boka här 👋
+</div>
+
 <button id="chat-button" onclick="toggleChat()">💬</button>
 
 <div id="chat-widget">
-  <div id="chat-header">Johanneshovrör Support</div>
+  <div id="chat-header">
+  Johanneshovrör Support
+  <span onclick="clearChat()" title="Rensa chatten" style="float:right; cursor:pointer;">
+    Rensa
+  </span>
+</div>
   <div id="chat-box"></div>
 
   <div id="chat-input-area">
@@ -139,17 +174,13 @@
 
 <script>
 
-// -------- USER --------
 const userId = localStorage.getItem("userId") || crypto.randomUUID();
 localStorage.setItem("userId", userId);
 
-// -------- CHAT HISTORY --------
+// ---------- HISTORY ----------
 function loadHistory() {
   let history = JSON.parse(localStorage.getItem("chatHistory") || "[]");
-
-  history.forEach(msg => {
-    addMessage(msg.text, msg.sender, false);
-  });
+  history.forEach(msg => addMessage(msg.text, msg.sender, false));
 }
 
 function saveMessage(text, sender) {
@@ -158,10 +189,15 @@ function saveMessage(text, sender) {
   localStorage.setItem("chatHistory", JSON.stringify(history));
 }
 
-// -------- UI --------
+// ---------- UI ----------
 function toggleChat() {
   let chat = document.getElementById("chat-widget");
   chat.style.display = chat.style.display === "none" ? "flex" : "none";
+}
+
+function openChat() {
+  document.getElementById("chat-widget").style.display = "flex";
+  document.getElementById("chat-hint").style.display = "none";
 }
 
 function addMessage(text, sender, save = true) {
@@ -177,8 +213,20 @@ function addMessage(text, sender, save = true) {
   if (save) saveMessage(text, sender);
 }
 
-// -------- TYPING --------
+// ---------- CLEAR ----------
+function clearChat() {
+  if (!confirm("Vill du rensa chatten?")) return;
+
+  localStorage.removeItem("chatHistory");
+  document.getElementById("chat-box").innerHTML = "";
+
+  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
+}
+
+// ---------- TYPING ----------
 function showTyping() {
+  removeTyping();
+
   let box = document.getElementById("chat-box");
 
   let typing = document.createElement("div");
@@ -196,21 +244,11 @@ function showTyping() {
 }
 
 function removeTyping() {
-  let typing = document.getElementById("typing");
-  if (typing) typing.remove();
+  let t = document.getElementById("typing");
+  if (t) t.remove();
 }
 
-// -------- SHOW REPLIES --------
-async function showReplies(replies) {
-  for (let msg of replies) {
-    showTyping();
-    await new Promise(r => setTimeout(r, 600));
-    removeTyping();
-    addMessage(msg, "bot");
-  }
-}
-
-// -------- SEND --------
+// ---------- SEND ----------
 let isSending = false;
 
 async function sendMessage() {
@@ -224,8 +262,9 @@ async function sendMessage() {
   addMessage(msg, "user");
   input.value = "";
 
+  showTyping();
+
   try {
-    // wake backend silently
     fetch("https://ai-rormokare.onrender.com/ping").catch(()=>{});
 
     let res = await fetch("https://ai-rormokare.onrender.com/chat", {
@@ -240,26 +279,30 @@ async function sendMessage() {
     });
 
     let data = await res.json();
-    await showReplies(data.replies);
 
-  } catch (err) {
-    // ❌ NO ugly error message anymore
-    addMessage("Hmm... något gick fel, testar igen...", "bot");
+    removeTyping();
 
-    setTimeout(() => {
-      sendMessage(); // auto retry
-    }, 2000);
+    if (data?.replies) {
+      for (let r of data.replies) {
+        addMessage(r, "bot");
+      }
+    } else {
+      addMessage("Hmm… något strular, testa igen 👍", "bot");
+    }
+
+  } catch {
+    removeTyping();
+    addMessage("Hmm… något strular, testa igen 👍", "bot");
   }
 
   isSending = false;
 }
 
-// enter key
 document.getElementById("chat-input").addEventListener("keypress", e => {
   if (e.key === "Enter") sendMessage();
 });
 
-// -------- INIT --------
+// ---------- INIT ----------
 loadHistory();
 
 if (!localStorage.getItem("chatHistory")) {
