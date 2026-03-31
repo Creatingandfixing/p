@@ -31,6 +31,20 @@ function capitalize(str) {
     .join(" ");
 }
 
+// 🔥 FIXED PHONE HANDLING
+function normalizePhone(phone) {
+  if (!phone) return null;
+
+  let cleaned = phone.replace(/\s+/g, "").replace(/[^\d+]/g, "");
+
+  // convert +46 → 0
+  if (cleaned.startsWith("+46")) {
+    cleaned = "0" + cleaned.slice(3);
+  }
+
+  return cleaned;
+}
+
 function isValidPhone(phone) {
   return typeof phone === "string" && /^\d{7,15}$/.test(phone);
 }
@@ -55,39 +69,22 @@ function safeParse(text) {
 function getProblemType(problem = "") {
   problem = problem.toLowerCase();
 
-  if (problem.includes("stopp") || problem.includes("avlopp")) return "stopp";
-  if (problem.includes("läcka") || problem.includes("dropp")) return "leak";
-  if (problem.includes("ingen vatten") || problem.includes("kommer inget")) return "no_water";
-  if (problem.includes("lukt")) return "smell";
+  if (problem.includes("stopp")) return "stopp";
+  if (problem.includes("läcka")) return "leak";
+  if (problem.includes("vatten")) return "no_water";
 
   return "other";
 }
 
 function getFollowUpQuestion(type) {
   const questions = {
-    stopp: [
-      "är det helt stopp eller rinner det undan lite?",
-      "gäller det kök, badrum eller golvbrunn?"
-    ],
-    leak: [
-      "var läcker det någonstans?",
-      "är det mycket vatten eller bara dropp?"
-    ],
-    no_water: [
-      "gäller det hela bostaden eller bara en kran?",
-      "slutade det plötsligt eller har det varit så ett tag?"
-    ],
-    smell: [
-      "kommer lukten från avloppet?",
-      "har det varit stopp nyligen?"
-    ],
-    other: [
-      "kan du beskriva lite mer exakt vad som händer?"
-    ]
+    stopp: "är det helt stopp eller rinner det undan lite?",
+    leak: "är det mycket vatten eller bara dropp?",
+    no_water: "gäller det hela bostaden eller bara en kran?",
+    other: "kan du beskriva lite mer exakt vad som händer?"
   };
 
-  const list = questions[type] || questions.other;
-  return list[Math.floor(Math.random() * list.length)];
+  return questions[type] || questions.other;
 }
 
 // -------- EMAIL --------
@@ -104,24 +101,24 @@ const transporter = nodemailer.createTransport({
 
 async function sendBookingEmail(data) {
   try {
-    console.log("Sending email to:", process.env.BOOKING_EMAIL);
+    console.log("📧 Sending booking:", data);
 
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
       subject: "🚨 Ny VVS Bokning",
       text: `
-Problem: ${data.problem || "-"}
-Detaljer: ${data.details || "-"}
-
-Namn: ${data.name || "-"}
-Telefon: ${data.phone || "-"}
-Adress: ${data.address || "-"}
-Tid: ${data.time || "-"}
+Problem: ${data.problem}
+Namn: ${data.name}
+Telefon: ${data.phone}
+Adress: ${data.address}
+Tid: ${data.time}
       `
     });
+
+    console.log("✅ Email sent!");
   } catch (err) {
-    console.error("Email error:", err.message);
+    console.error("❌ Email error:", err.message);
   }
 }
 
@@ -142,7 +139,7 @@ Return ONLY JSON:
 {
   "problem": "",
   "details": "",
-  "urgency": "low/medium/high",
+  "urgency": "",
   "name": "",
   "phone": "",
   "address": "",
@@ -167,42 +164,30 @@ app.post("/chat", async (req, res) => {
   try {
     const raw = req.body?.message || "";
     const msg = clean(raw);
-    const userId =
-      req.body?.userId || Math.random().toString(36).slice(2);
+    const userId = req.body?.userId || Math.random().toString(36);
 
-    if (!msg) {
-      return res.json({
-        replies: ["Tja! Vad kan jag hjälpa dig med? 🙂"]
-      });
-    }
-
-    // SAFE STATE INIT
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // SPAM PROTECTION
-    if (state.lastBooking && Date.now() - state.lastBooking < 60000) {
-      return res.json({
-        replies: ["Jag har redan lagt in det 👍 vi hör av oss"]
-      });
-    }
-
-    // AI EXTRACTION
+    // AI extract
     const data = await aiExtract(raw);
 
     if (data.problem && !state.problem) state.problem = data.problem;
-    if (data.details && !state.details) state.details = data.details;
     if (data.name && !state.name) state.name = capitalize(data.name);
-    if (data.phone && !state.phone && isValidPhone(data.phone)) {
-      state.phone = data.phone;
+
+    // 🔥 FIXED PHONE LOGIC
+    let possiblePhone = normalizePhone(data.phone || raw);
+    if (!state.phone && isValidPhone(possiblePhone)) {
+      state.phone = possiblePhone;
     }
+
     if (data.address && !state.address && isValidAddress(data.address)) {
       state.address = capitalize(data.address);
     }
-    if (data.time && !state.time) state.time = data.time;
-    if (data.urgency && !state.urgency) state.urgency = data.urgency;
 
-    // INSTANT BOOKING
+    if (data.time && !state.time) state.time = data.time;
+
+    // BOOKING
     if (
       state.problem &&
       state.name &&
@@ -210,186 +195,62 @@ app.post("/chat", async (req, res) => {
       state.address &&
       state.time
     ) {
-      try {
-        fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
-      } catch {}
-
+      fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
       await sendBookingEmail(state);
 
-      state.lastBooking = Date.now();
-
-      // ✅ FIXED (KEEP STATE SAFE)
-      users[userId] = { lastBooking: state.lastBooking };
+      users[userId] = {};
 
       return res.json({
         replies: [
           `Perfekt ${state.name} 👍`,
-          state.urgency === "high"
-            ? "Vi prioriterar detta direkt."
-            : "Vi hör av oss snart!"
+          "Vi hör av oss snart!"
         ]
       });
     }
 
-    // GREETING
-    const greetings = ["hej","hejsan","hallå","tja","tjena","tjabba"];
-    if (!state.problem && greetings.includes(msg)) {
-      return res.json({
-        replies: ["Tja! Vad kan jag hjälpa dig med? 🙂"]
-      });
-    }
-
-    // FILTER
-    const plumbingKeywords = [
-      "stopp","avlopp","läcka","vatten",
-      "kran","toalett","rör","handfat","dusch","badkar"
-    ];
-
-    const isPlumbing = plumbingKeywords.some(w =>
-      (state.problem || "").toLowerCase().includes(w)
-    );
-
-    if (!isPlumbing && state.problem) {
-      return res.json({
-        replies: ["Jag hjälper bara med VVS 😄 gäller det stopp eller läcka?"]
-      });
-    }
-
-    // INDUSTRY QUESTION
-    if (state.problem && !state.deepAsked) {
-      state.deepAsked = true;
-
-      const type = getProblemType(state.problem);
-      const question = getFollowUpQuestion(type);
-
-      return res.json({
-        replies: [`Okej, ${state.problem} — ${question}`]
-      });
-    }
-
     // FLOW
-    if (state.problem && !state.name) {
+
+    if (state.problem && !state.asked) {
+      state.asked = true;
+      return res.json({
+        replies: [
+          `Okej, ${state.problem} — ${getFollowUpQuestion(getProblemType(state.problem))}`
+        ]
+      });
+    }
+
+    if (!state.name) {
       return res.json({ replies: ["Vad heter du?"] });
     }
 
-    if (state.name && !state.phone) {
+    if (!state.phone) {
       return res.json({
         replies: [`Toppen ${state.name} 👍 vilket nummer når vi dig på?`]
       });
     }
 
-    if (state.phone && !state.address) {
-      return res.json({
-        replies: ["Vilken adress gäller det?"]
-      });
+    if (!state.address) {
+      return res.json({ replies: ["Vilken adress gäller det?"] });
     }
 
-    if (state.address && !state.time) {
-      return res.json({
-        replies: ["När passar det bäst?"]
-      });
+    if (!state.time) {
+      return res.json({ replies: ["När passar det bäst?"] });
     }
 
     return res.json({
-      replies: ["Berätta lite mer så löser vi det 👍"]
+      replies: ["Berätta lite mer 👍"]
     });
 
   } catch (err) {
-    console.error("MAIN ERROR:", err.message);
-    return res.json({
-      replies: ["Nåt blev knas 🤔 testa igen"]
-    });
-  }
-});
-
-// -------- AUTH --------
-
-function checkAuth(req) {
-  try {
-    const auth = req.headers.authorization;
-    if (!auth) return false;
-
-    const [user, pass] = Buffer.from(
-      auth.split(" ")[1],
-      "base64"
-    ).toString().split(":");
-
-    return (
-      user === process.env.DASH_USER &&
-      pass === process.env.DASH_PASS
-    );
-  } catch {
-    return false;
-  }
-}
-
-// -------- DASHBOARD --------
-
-app.get("/dashboard", (req, res) => {
-  if (!checkAuth(req)) {
-    res.setHeader("WWW-Authenticate", "Basic");
-    return res.status(401).send("Login required");
-  }
-
-  try {
-    if (!fs.existsSync("bookings.txt")) {
-      return res.send("<h2>Inga bokningar ännu</h2>");
-    }
-
-    const data = fs.readFileSync("bookings.txt", "utf-8");
-
-    const bookings = data
-      .split("\n")
-      .filter(Boolean)
-      .map(line => {
-        try {
-          return JSON.parse(line);
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean);
-
-    let html = `
-      <h1>📊 Bokningar</h1>
-      <table border="1" cellpadding="10">
-        <tr>
-          <th>Namn</th>
-          <th>Problem</th>
-          <th>Telefon</th>
-          <th>Adress</th>
-          <th>Tid</th>
-        </tr>
-    `;
-
-    bookings.reverse().forEach(b => {
-      html += `
-        <tr>
-          <td>${b.name || "-"}</td>
-          <td>${b.problem || "-"}</td>
-          <td>${b.phone || "-"}</td>
-          <td>${b.address || "-"}</td>
-          <td>${b.time || "-"}</td>
-        </tr>
-      `;
-    });
-
-    html += "</table>";
-    res.send(html);
-
-  } catch {
-    res.send("Error loading dashboard");
+    console.error(err);
+    res.json({ replies: ["Nåt blev fel"] });
   }
 });
 
 // -------- BASIC --------
 
 app.get("/", (req, res) => {
-  res.send("🔥 AI Rörmokare är igång");
+  res.send("🔥 Running");
 });
 
-app.get("/ping", (req, res) => res.send("OK"));
-
-app.listen(process.env.PORT || 3000, () => {
-  console.log("🔥 INDUSTRY AI RUNNING");
-});
+app.listen(process.env.PORT || 3000);
