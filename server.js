@@ -31,7 +31,6 @@ function capitalize(str) {
     .join(" ");
 }
 
-// PHONE FIX
 function normalizePhone(phone) {
   if (!phone) return null;
   let cleaned = phone.replace(/\s+/g, "").replace(/[^\d+]/g, "");
@@ -58,12 +57,12 @@ function safeParse(text) {
   }
 }
 
-// -------- TIME INTELLIGENCE --------
+// -------- TIME --------
 
 function analyzeTime(text = "") {
   text = text.toLowerCase();
 
-  const hasTime = /\d{1,2}[:.]?\d{0,2}/.test(text);
+  const hasTime = /\d{1,2}/.test(text);
 
   const hasDay =
     text.includes("idag") ||
@@ -83,27 +82,39 @@ function analyzeTime(text = "") {
   return "invalid";
 }
 
-// -------- INDUSTRY LOGIC --------
+// -------- AI HUMAN REPLIES --------
 
-function getProblemType(problem = "") {
-  problem = problem.toLowerCase();
+async function generateReply(context, goal) {
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.7,
+      messages: [
+        {
+          role: "system",
+          content: `
+Du är en trevlig svensk rörmokare som chattar med kunder.
 
-  if (problem.includes("stopp")) return "stopp";
-  if (problem.includes("läcka")) return "leak";
-  if (problem.includes("vatten")) return "no_water";
+Regler:
+- Skriv naturligt och kort
+- Låter som en riktig människa
+- Lite avslappnad ton (typ 😅 👍)
+- Hjälp kunden MEN styr mot bokning
+- Var inte formell
 
-  return "other";
-}
+Mål: ${goal}
+Kontext: ${context}
 
-function getFollowUpQuestion(type) {
-  const questions = {
-    stopp: "är det helt stopp eller rinner det undan lite?",
-    leak: "är det mycket vatten eller bara dropp?",
-    no_water: "gäller det hela bostaden eller bara en kran?",
-    other: "kan du beskriva lite mer exakt vad som händer?"
-  };
+Svar:
+`
+        }
+      ]
+    });
 
-  return questions[type] || questions.other;
+    return res.choices?.[0]?.message?.content || "Okej 👍";
+  } catch {
+    return "Okej 👍";
+  }
 }
 
 // -------- EMAIL --------
@@ -120,8 +131,6 @@ const transporter = nodemailer.createTransport({
 
 async function sendBookingEmail(data) {
   try {
-    console.log("📧 Sending booking:", data);
-
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
@@ -134,14 +143,12 @@ Adress: ${data.address}
 Tid: ${data.time}
       `
     });
-
-    console.log("✅ Email sent!");
   } catch (err) {
-    console.error("❌ Email error:", err.message);
+    console.error("Email error:", err.message);
   }
 }
 
-// -------- AI --------
+// -------- AI EXTRACT --------
 
 async function aiExtract(message) {
   try {
@@ -152,9 +159,8 @@ async function aiExtract(message) {
         {
           role: "user",
           content: `
-Extract info from this Swedish plumbing message.
+Extract info:
 
-Return ONLY JSON:
 {
   "problem": "",
   "name": "",
@@ -186,6 +192,16 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
+    // 🔥 CHANGE BOOKING INTENT
+    if (msg.includes("ändra") || msg.includes("ändring")) {
+      state.time = null;
+      const reply = await generateReply(
+        "User wants to change booking",
+        "Ask for new time"
+      );
+      return res.json({ replies: [reply] });
+    }
+
     const data = await aiExtract(raw);
 
     if (data.problem && !state.problem) state.problem = data.problem;
@@ -198,24 +214,18 @@ app.post("/chat", async (req, res) => {
       state.address = capitalize(data.address);
     }
 
-    // 🧠 SMART TIME HANDLING
+    // TIME
     if (!state.time && data.time) {
       const result = analyzeTime(data.time);
 
       if (result === "valid") {
         state.time = data.time;
-      } else if (result === "missing_day") {
-        return res.json({
-          replies: ["Bra 👍 vilken dag passar dig bäst?"]
-        });
-      } else if (result === "missing_time") {
-        return res.json({
-          replies: ["Vilken tid på dagen passar dig?"]
-        });
       } else {
-        return res.json({
-          replies: ["Kan du skriva t.ex. 'imorgon kl 15'?"]
-        });
+        const reply = await generateReply(
+          data.time,
+          "Help the user give a correct time like 'imorgon kl 15'"
+        );
+        return res.json({ replies: [reply] });
       }
     }
 
@@ -232,43 +242,73 @@ app.post("/chat", async (req, res) => {
 
       users[userId] = {};
 
+      const reply = await generateReply(
+        "Booking completed",
+        "Confirm booking and mention they can change it later"
+      );
+
       return res.json({
         replies: [
-          `Perfekt ${state.name} 👍`,
-          "Vi hör av oss snart!"
+          reply + " (du kan alltid ändra tiden senare 👍)"
         ]
       });
     }
 
-    // FLOW
+    // GREETING FIX
+    if (!state.problem) {
+      return res.json({
+        replies: [
+          "Tja! Vad kan jag hjälpa dig med? 🙂 (chatten sparas)"
+        ]
+      });
+    }
 
+    // FOLLOW UP
     if (state.problem && !state.asked) {
       state.asked = true;
-      return res.json({
-        replies: [
-          `Okej, ${state.problem} — ${getFollowUpQuestion(getProblemType(state.problem))}`
-        ]
-      });
+
+      const reply = await generateReply(
+        state.problem,
+        "Ask a smart follow-up question"
+      );
+
+      return res.json({ replies: [reply] });
     }
 
+    // NAME
     if (!state.name) {
-      return res.json({ replies: ["Vad heter du?"] });
+      const reply = await generateReply(
+        state.problem,
+        "Ask for the user's name naturally"
+      );
+      return res.json({ replies: [reply] });
     }
 
+    // PHONE (CLOSE HARDER)
     if (!state.phone) {
-      return res.json({
-        replies: [`Toppen ${state.name} 👍 vilket nummer når vi dig på?`]
-      });
+      const reply = await generateReply(
+        state.name,
+        "Ask for phone number confidently so we can book"
+      );
+      return res.json({ replies: [reply] });
     }
 
+    // ADDRESS
     if (!state.address) {
-      return res.json({ replies: ["Vilken adress gäller det?"] });
+      const reply = await generateReply(
+        state.name,
+        "Ask for address"
+      );
+      return res.json({ replies: [reply] });
     }
 
+    // TIME
     if (!state.time) {
-      return res.json({
-        replies: ["När passar det bäst? (t.ex. imorgon kl 15)"]
-      });
+      const reply = await generateReply(
+        state.name,
+        "Ask when they want the job done"
+      );
+      return res.json({ replies: [reply] });
     }
 
     return res.json({
