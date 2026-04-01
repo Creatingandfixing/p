@@ -82,7 +82,7 @@ function analyzeTime(text = "") {
   return "invalid";
 }
 
-// -------- AI HUMAN REPLIES --------
+// -------- PRO CLOSER AI --------
 
 async function generateReply(context, goal) {
   try {
@@ -93,17 +93,22 @@ async function generateReply(context, goal) {
         {
           role: "system",
           content: `
-Du är en trevlig svensk rörmokare som chattar med kunder.
+Du är en erfaren svensk rörmokare som chattar med kunder.
+
+Mål:
+- Hjälp kunden
+- Få bokningen gjord
 
 Regler:
-- Skriv naturligt och kort
-- Låter som en riktig människa
-- Lite avslappnad ton (typ 😅 👍)
-- Hjälp kunden MEN styr mot bokning
-- Var inte formell
+- Låter som en riktig person (kort, naturligt)
+- Lite avslappnad ton (👍😅)
+- Ställ alltid nästa fråga (ingen död konversation)
+- Anta bokning (inte fråga OM, utan NÄR)
+- Hantera tvekan (t.ex. "vet inte", "sen") genom att göra det enkelt att fortsätta
+- Minska friktion (”du kan alltid ändra sen”)
 
-Mål: ${goal}
 Kontext: ${context}
+Uppgift: ${goal}
 
 Svar:
 `
@@ -159,7 +164,7 @@ async function aiExtract(message) {
         {
           role: "user",
           content: `
-Extract info:
+Extract:
 
 {
   "problem": "",
@@ -192,12 +197,25 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // 🔥 CHANGE BOOKING INTENT
-    if (msg.includes("ändra") || msg.includes("ändring")) {
+    // 🔥 HANDLE HESITATION (PRO CLOSER)
+    if (
+      msg.includes("vet inte") ||
+      msg.includes("kanske") ||
+      msg.includes("sen")
+    ) {
+      const reply = await generateReply(
+        state,
+        "Handle hesitation and move user forward to booking"
+      );
+      return res.json({ replies: [reply] });
+    }
+
+    // 🔥 CHANGE BOOKING
+    if (msg.includes("ändra")) {
       state.time = null;
       const reply = await generateReply(
-        "User wants to change booking",
-        "Ask for new time"
+        state,
+        "Ask for new booking time"
       );
       return res.json({ replies: [reply] });
     }
@@ -223,13 +241,13 @@ app.post("/chat", async (req, res) => {
       } else {
         const reply = await generateReply(
           data.time,
-          "Help the user give a correct time like 'imorgon kl 15'"
+          "Help user provide correct booking time"
         );
         return res.json({ replies: [reply] });
       }
     }
 
-    // BOOKING
+    // BOOKING COMPLETE
     if (
       state.problem &&
       state.name &&
@@ -243,27 +261,23 @@ app.post("/chat", async (req, res) => {
       users[userId] = {};
 
       const reply = await generateReply(
-        "Booking completed",
-        "Confirm booking and mention they can change it later"
+        state,
+        "Confirm booking professionally and friendly"
       );
 
       return res.json({
-        replies: [
-          reply + " (du kan alltid ändra tiden senare 👍)"
-        ]
+        replies: [reply + " (du kan alltid ändra tiden senare 👍)"]
       });
     }
 
-    // GREETING FIX
+    // FLOW
+
     if (!state.problem) {
       return res.json({
-        replies: [
-          "Tja! Vad kan jag hjälpa dig med? 🙂 (chatten sparas)"
-        ]
+        replies: ["Tja! Beskriv vad som hänt så löser vi det direkt 👍"]
       });
     }
 
-    // FOLLOW UP
     if (state.problem && !state.asked) {
       state.asked = true;
 
@@ -275,25 +289,22 @@ app.post("/chat", async (req, res) => {
       return res.json({ replies: [reply] });
     }
 
-    // NAME
     if (!state.name) {
       const reply = await generateReply(
         state.problem,
-        "Ask for the user's name naturally"
+        "Ask for user's name naturally"
       );
       return res.json({ replies: [reply] });
     }
 
-    // PHONE (CLOSE HARDER)
     if (!state.phone) {
       const reply = await generateReply(
         state.name,
-        "Ask for phone number confidently so we can book"
+        "Ask for phone number confidently"
       );
       return res.json({ replies: [reply] });
     }
 
-    // ADDRESS
     if (!state.address) {
       const reply = await generateReply(
         state.name,
@@ -302,7 +313,6 @@ app.post("/chat", async (req, res) => {
       return res.json({ replies: [reply] });
     }
 
-    // TIME
     if (!state.time) {
       const reply = await generateReply(
         state.name,
