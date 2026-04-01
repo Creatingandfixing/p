@@ -31,17 +31,11 @@ function capitalize(str) {
     .join(" ");
 }
 
-// 🔥 FIXED PHONE HANDLING
+// PHONE FIX
 function normalizePhone(phone) {
   if (!phone) return null;
-
   let cleaned = phone.replace(/\s+/g, "").replace(/[^\d+]/g, "");
-
-  // convert +46 → 0
-  if (cleaned.startsWith("+46")) {
-    cleaned = "0" + cleaned.slice(3);
-  }
-
+  if (cleaned.startsWith("+46")) cleaned = "0" + cleaned.slice(3);
   return cleaned;
 }
 
@@ -62,6 +56,31 @@ function safeParse(text) {
   } catch {
     return {};
   }
+}
+
+// -------- TIME INTELLIGENCE --------
+
+function analyzeTime(text = "") {
+  text = text.toLowerCase();
+
+  const hasTime = /\d{1,2}[:.]?\d{0,2}/.test(text);
+
+  const hasDay =
+    text.includes("idag") ||
+    text.includes("imorgon") ||
+    text.includes("måndag") ||
+    text.includes("tisdag") ||
+    text.includes("onsdag") ||
+    text.includes("torsdag") ||
+    text.includes("fredag") ||
+    text.includes("lördag") ||
+    text.includes("söndag");
+
+  if (hasTime && hasDay) return "valid";
+  if (hasTime && !hasDay) return "missing_day";
+  if (!hasTime && hasDay) return "missing_time";
+
+  return "invalid";
 }
 
 // -------- INDUSTRY LOGIC --------
@@ -138,8 +157,6 @@ Extract info from this Swedish plumbing message.
 Return ONLY JSON:
 {
   "problem": "",
-  "details": "",
-  "urgency": "",
   "name": "",
   "phone": "",
   "address": "",
@@ -169,23 +186,38 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // AI extract
     const data = await aiExtract(raw);
 
     if (data.problem && !state.problem) state.problem = data.problem;
     if (data.name && !state.name) state.name = capitalize(data.name);
 
-    // 🔥 FIXED PHONE LOGIC
-    let possiblePhone = normalizePhone(data.phone || raw);
-    if (!state.phone && isValidPhone(possiblePhone)) {
-      state.phone = possiblePhone;
-    }
+    let phone = normalizePhone(data.phone || raw);
+    if (!state.phone && isValidPhone(phone)) state.phone = phone;
 
     if (data.address && !state.address && isValidAddress(data.address)) {
       state.address = capitalize(data.address);
     }
 
-    if (data.time && !state.time) state.time = data.time;
+    // 🧠 SMART TIME HANDLING
+    if (!state.time && data.time) {
+      const result = analyzeTime(data.time);
+
+      if (result === "valid") {
+        state.time = data.time;
+      } else if (result === "missing_day") {
+        return res.json({
+          replies: ["Bra 👍 vilken dag passar dig bäst?"]
+        });
+      } else if (result === "missing_time") {
+        return res.json({
+          replies: ["Vilken tid på dagen passar dig?"]
+        });
+      } else {
+        return res.json({
+          replies: ["Kan du skriva t.ex. 'imorgon kl 15'?"]
+        });
+      }
+    }
 
     // BOOKING
     if (
@@ -234,7 +266,9 @@ app.post("/chat", async (req, res) => {
     }
 
     if (!state.time) {
-      return res.json({ replies: ["När passar det bäst?"] });
+      return res.json({
+        replies: ["När passar det bäst? (t.ex. imorgon kl 15)"]
+      });
     }
 
     return res.json({
