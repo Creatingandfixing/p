@@ -48,10 +48,7 @@ function isValidAddress(addr) {
 
 function safeParse(text) {
   try {
-    if (!text) return {};
-    return JSON.parse(
-      text.replace(/```json/g, "").replace(/```/g, "").trim()
-    );
+    return JSON.parse(text.replace(/```json/g, "").replace(/```/g, "").trim());
   } catch {
     return {};
   }
@@ -82,7 +79,7 @@ function analyzeTime(text = "") {
   return "invalid";
 }
 
-// -------- PRO CLOSER AI --------
+// -------- AI --------
 
 async function generateReply(context, goal) {
   try {
@@ -93,22 +90,18 @@ async function generateReply(context, goal) {
         {
           role: "system",
           content: `
-Du är en erfaren svensk rörmokare som chattar med kunder.
-
-Mål:
-- Hjälp kunden
-- Få bokningen gjord
+Du är en erfaren svensk rörmokare.
 
 Regler:
-- Låter som en riktig person (kort, naturligt)
-- Lite avslappnad ton (👍😅)
-- Ställ alltid nästa fråga (ingen död konversation)
-- Anta bokning (inte fråga OM, utan NÄR)
-- Hantera tvekan (t.ex. "vet inte", "sen") genom att göra det enkelt att fortsätta
-- Minska friktion (”du kan alltid ändra sen”)
+- Kort, naturlig, mänsklig ton
+- Lite avslappnad (👍😅)
+- För konversationen framåt
+- Anta bokning
+- Hantera tvekan smart
+- Ställ alltid nästa fråga
 
 Kontext: ${context}
-Uppgift: ${goal}
+Mål: ${goal}
 
 Svar:
 `
@@ -149,7 +142,7 @@ Tid: ${data.time}
       `
     });
   } catch (err) {
-    console.error("Email error:", err.message);
+    console.error(err.message);
   }
 }
 
@@ -160,10 +153,9 @@ async function aiExtract(message) {
     const res = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.2,
-      messages: [
-        {
-          role: "user",
-          content: `
+      messages: [{
+        role: "user",
+        content: `
 Extract:
 
 {
@@ -176,8 +168,7 @@ Extract:
 
 Message: "${message}"
 `
-        }
-      ]
+      }]
     });
 
     return safeParse(res.choices?.[0]?.message?.content);
@@ -190,37 +181,41 @@ Message: "${message}"
 
 app.post("/chat", async (req, res) => {
   try {
-    const raw = req.body?.message || "";
+    const raw = req.body.message || "";
     const msg = clean(raw);
-    const userId = req.body?.userId || Math.random().toString(36);
+    const userId = req.body.userId || Math.random().toString(36);
 
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // 🔥 HANDLE HESITATION (PRO CLOSER)
-    if (
-      msg.includes("vet inte") ||
-      msg.includes("kanske") ||
-      msg.includes("sen")
-    ) {
-      const reply = await generateReply(
-        state,
-        "Handle hesitation and move user forward to booking"
-      );
-      return res.json({ replies: [reply] });
-    }
-
-    // 🔥 CHANGE BOOKING
-    if (msg.includes("ändra")) {
-      state.time = null;
-      const reply = await generateReply(
-        state,
-        "Ask for new booking time"
-      );
-      return res.json({ replies: [reply] });
-    }
-
     const data = await aiExtract(raw);
+
+    // -------- CONTEXT UNDERSTANDING --------
+
+    if (state.lastQuestion === "time") {
+      const result = analyzeTime(msg);
+
+      if (result === "valid") {
+        state.time = msg;
+      } else {
+        return res.json({
+          replies: ["Kan du skriva t.ex. 'imorgon kl 15'? 👍"]
+        });
+      }
+    }
+
+    if (state.lastQuestion === "phone") {
+      let phone = normalizePhone(msg);
+      if (isValidPhone(phone)) {
+        state.phone = phone;
+      }
+    }
+
+    if (state.lastQuestion === "name" && !state.name) {
+      state.name = capitalize(msg);
+    }
+
+    // -------- NORMAL AI EXTRACT --------
 
     if (data.problem && !state.problem) state.problem = data.problem;
     if (data.name && !state.name) state.name = capitalize(data.name);
@@ -232,45 +227,28 @@ app.post("/chat", async (req, res) => {
       state.address = capitalize(data.address);
     }
 
-    // TIME
     if (!state.time && data.time) {
       const result = analyzeTime(data.time);
 
       if (result === "valid") {
         state.time = data.time;
-      } else {
-        const reply = await generateReply(
-          data.time,
-          "Help user provide correct booking time"
-        );
-        return res.json({ replies: [reply] });
       }
     }
 
-    // BOOKING COMPLETE
-    if (
-      state.problem &&
-      state.name &&
-      state.phone &&
-      state.address &&
-      state.time
-    ) {
+    // -------- BOOKING --------
+
+    if (state.problem && state.name && state.phone && state.address && state.time) {
       fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
       await sendBookingEmail(state);
 
       users[userId] = {};
 
-      const reply = await generateReply(
-        state,
-        "Confirm booking professionally and friendly"
-      );
-
       return res.json({
-        replies: [reply + " (du kan alltid ändra tiden senare 👍)"]
+        replies: ["Perfekt 👍 vi hör av oss snart! (du kan ändra tiden senare)"]
       });
     }
 
-    // FLOW
+    // -------- FLOW --------
 
     if (!state.problem) {
       return res.json({
@@ -282,42 +260,54 @@ app.post("/chat", async (req, res) => {
       state.asked = true;
 
       const reply = await generateReply(
-        state.problem,
-        "Ask a smart follow-up question"
+        `Problem: ${state.problem}`,
+        "Ask a follow-up question"
       );
 
       return res.json({ replies: [reply] });
     }
 
     if (!state.name) {
+      state.lastQuestion = "name";
+
       const reply = await generateReply(
         state.problem,
-        "Ask for user's name naturally"
+        "Ask for name"
       );
+
       return res.json({ replies: [reply] });
     }
 
     if (!state.phone) {
+      state.lastQuestion = "phone";
+
       const reply = await generateReply(
         state.name,
-        "Ask for phone number confidently"
+        "Ask for phone"
       );
+
       return res.json({ replies: [reply] });
     }
 
     if (!state.address) {
+      state.lastQuestion = "address";
+
       const reply = await generateReply(
         state.name,
         "Ask for address"
       );
+
       return res.json({ replies: [reply] });
     }
 
     if (!state.time) {
+      state.lastQuestion = "time";
+
       const reply = await generateReply(
         state.name,
-        "Ask when they want the job done"
+        "Ask for booking time"
       );
+
       return res.json({ replies: [reply] });
     }
 
@@ -330,8 +320,6 @@ app.post("/chat", async (req, res) => {
     res.json({ replies: ["Nåt blev fel"] });
   }
 });
-
-// -------- BASIC --------
 
 app.get("/", (req, res) => {
   res.send("🔥 Running");
