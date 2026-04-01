@@ -4,9 +4,7 @@
   <title>Johanneshovrör</title>
 
   <style>
-    body {
-      font-family: Arial, sans-serif;
-    }
+    body { font-family: Arial, sans-serif; }
 
     #chat-button {
       position: fixed;
@@ -24,7 +22,6 @@
       z-index: 10;
     }
 
-    /* 💬 Bubble hint */
     #chat-hint {
       position: fixed;
       bottom: 90px;
@@ -67,6 +64,8 @@
     #chat-header span {
       float: right;
       cursor: pointer;
+      font-size: 12px;
+      opacity: 0.9;
     }
 
     #chat-box {
@@ -150,7 +149,7 @@
 <h1>Johanneshovrör</h1>
 <p>Välkommen! Vi hjälper dig med VVS.</p>
 
-<!-- 💬 hint -->
+<!-- Hint -->
 <div id="chat-hint" onclick="openChat()">
   Behöver du hjälp? Boka här 👋
 </div>
@@ -159,11 +158,10 @@
 
 <div id="chat-widget">
   <div id="chat-header">
-  Johanneshovrör Support
-  <span onclick="clearChat()" title="Rensa chatten" style="float:right; cursor:pointer;">
-    Rensa
-  </span>
-</div>
+    Johanneshovrör Support
+    <span onclick="clearChat()">Rensa</span>
+  </div>
+
   <div id="chat-box"></div>
 
   <div id="chat-input-area">
@@ -174,10 +172,11 @@
 
 <script>
 
+// -------- USER --------
 const userId = localStorage.getItem("userId") || crypto.randomUUID();
 localStorage.setItem("userId", userId);
 
-// ---------- HISTORY ----------
+// -------- HISTORY --------
 function loadHistory() {
   let history = JSON.parse(localStorage.getItem("chatHistory") || "[]");
   history.forEach(msg => addMessage(msg.text, msg.sender, false));
@@ -189,7 +188,7 @@ function saveMessage(text, sender) {
   localStorage.setItem("chatHistory", JSON.stringify(history));
 }
 
-// ---------- UI ----------
+// -------- UI --------
 function toggleChat() {
   let chat = document.getElementById("chat-widget");
   chat.style.display = chat.style.display === "none" ? "flex" : "none";
@@ -198,6 +197,13 @@ function toggleChat() {
 function openChat() {
   document.getElementById("chat-widget").style.display = "flex";
   document.getElementById("chat-hint").style.display = "none";
+}
+
+function clearChat() {
+  localStorage.removeItem("chatHistory");
+  const box = document.getElementById("chat-box");
+  box.innerHTML = "";
+  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂 (chatten sparas)", "bot");
 }
 
 function addMessage(text, sender, save = true) {
@@ -213,17 +219,7 @@ function addMessage(text, sender, save = true) {
   if (save) saveMessage(text, sender);
 }
 
-// ---------- CLEAR ----------
-function clearChat() {
-  if (!confirm("Vill du rensa chatten?")) return;
-
-  localStorage.removeItem("chatHistory");
-  document.getElementById("chat-box").innerHTML = "";
-
-  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
-}
-
-// ---------- TYPING ----------
+// -------- TYPING --------
 function showTyping() {
   removeTyping();
 
@@ -244,11 +240,35 @@ function showTyping() {
 }
 
 function removeTyping() {
-  let t = document.getElementById("typing");
-  if (t) t.remove();
+  let typing = document.getElementById("typing");
+  if (typing) typing.remove();
 }
 
-// ---------- SEND ----------
+// -------- FETCH RETRY --------
+async function fetchWithRetry(url, options, retries = 3) {
+  try {
+    let res = await fetch(url, options);
+    if (!res.ok) throw new Error();
+    return await res.json();
+  } catch (err) {
+    if (retries > 0) {
+      await new Promise(r => setTimeout(r, 1000));
+      return fetchWithRetry(url, options, retries - 1);
+    } else {
+      throw err;
+    }
+  }
+}
+
+// -------- SHOW REPLIES --------
+async function showReplies(replies) {
+  for (let msg of replies) {
+    await new Promise(r => setTimeout(r, 500));
+    addMessage(msg, "bot");
+  }
+}
+
+// -------- SEND --------
 let isSending = false;
 
 async function sendMessage() {
@@ -265,48 +285,37 @@ async function sendMessage() {
   showTyping();
 
   try {
-    fetch("https://ai-rormokare.onrender.com/ping").catch(()=>{});
+    fetch("https://ai-rormokare.onrender.com/").catch(()=>{});
 
-    let res = await fetch("https://ai-rormokare.onrender.com/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        message: msg,
-        userId: userId
-      })
-    });
-
-    let data = await res.json();
+    const data = await fetchWithRetry(
+      "https://ai-rormokare.onrender.com/chat",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg, userId })
+      }
+    );
 
     removeTyping();
-
-    if (data?.replies) {
-      for (let r of data.replies) {
-        addMessage(r, "bot");
-      }
-    } else {
-      addMessage("Hmm… något strular, testa igen 👍", "bot");
-    }
+    await showReplies(data.replies);
 
   } catch {
-    removeTyping();
-    addMessage("Hmm… något strular, testa igen 👍", "bot");
+    setTimeout(() => sendMessage(), 1500);
   }
 
   isSending = false;
 }
 
+// -------- ENTER --------
 document.getElementById("chat-input").addEventListener("keypress", e => {
   if (e.key === "Enter") sendMessage();
 });
 
-// ---------- INIT ----------
+// -------- INIT --------
 loadHistory();
 
-if (!localStorage.getItem("chatHistory")) {
-  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
+if (JSON.parse(localStorage.getItem("chatHistory") || "[]").length === 0) {
+  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂 (chatten sparas)", "bot");
 }
 
 </script>
