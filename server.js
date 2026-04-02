@@ -99,17 +99,16 @@ MÅL:
 VIKTIGA REGLER:
 - Säg ALDRIG "Hej" igen mitt i konversationen
 - Svara kort (1–2 meningar max)
-- Låt som en riktig person, inte en AI
-- Använd korrekt svenska (t.ex. "inget vatten")
-- Upprepa inte vad kunden redan sagt
-- Ställ alltid EN tydlig nästa fråga
-- För konversationen framåt (inga döda svar)
+- Låt som en riktig person
+- Korrekt svenska
+- Upprepa inte kunden
+- Ställ EN tydlig fråga
+- För konversationen framåt
 
 BETEENDE:
-- Anta bokning (fråga aldrig OM, utan fortsätt processen)
-- Gör det enkelt att säga ja (”du kan alltid ändra sen”)
-- Hantera tvekan naturligt (”fattar 👍 men vi kan bara lägga in en tid…”)
-- Låt trygg, lugn och professionell
+- Anta bokning
+- Minska friktion ("du kan alltid ändra sen")
+- Hantera tvekan naturligt
 
 Kontext: ${context}
 Mål: ${goal}
@@ -199,34 +198,69 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
+    // -------- TIME AWARENESS --------
+
+    const now = Date.now();
+    const last = state.lastMessageAt || now;
+    const diff = now - last;
+    state.lastMessageAt = now;
+
+    if (diff > 1000 * 60 * 60 * 6) {
+      users[userId] = {};
+      return res.json({
+        replies: ["Vi tappade nog tråden 😅 vad kan jag hjälpa dig med?"]
+      });
+    }
+
+    if (diff > 1000 * 60 * 30) {
+      state.asked = false;
+      return res.json({
+        replies: ["Ska vi fortsätta där vi var eller har något ändrats? 👍"]
+      });
+    }
+
     const data = await aiExtract(raw);
 
-    // -------- CONTEXT UNDERSTANDING --------
+    // -------- HANDLE HESITATION --------
 
-    if (state.lastQuestion === "time") {
-      const result = analyzeTime(msg);
-
-      if (result === "valid") {
-        state.time = msg;
-      } else {
+    if (
+      msg.includes("vet inte") ||
+      msg.includes("kanske") ||
+      msg.includes("sen")
+    ) {
+      if (!state.time) {
         return res.json({
-          replies: ["Kan du skriva t.ex. 'imorgon kl 15'? 👍"]
+          replies: [
+            "fattar 👍 vi kan bara lägga in en tid ungefär, du kan alltid ändra sen — vilken dag passar dig bäst?"
+          ]
+        });
+      }
+
+      if (!state.name) {
+        return res.json({
+          replies: ["ingen stress 👍 vad heter du så fixar vi resten sen?"]
         });
       }
     }
 
+    // -------- CONTEXT --------
+
+    if (state.lastQuestion === "time") {
+      const result = analyzeTime(msg);
+      if (result === "valid") state.time = msg;
+      else return res.json({ replies: ["t.ex. imorgon kl 15 👍"] });
+    }
+
     if (state.lastQuestion === "phone") {
       let phone = normalizePhone(msg);
-      if (isValidPhone(phone)) {
-        state.phone = phone;
-      }
+      if (isValidPhone(phone)) state.phone = phone;
     }
 
     if (state.lastQuestion === "name" && !state.name) {
       state.name = capitalize(msg);
     }
 
-    // -------- NORMAL AI EXTRACT --------
+    // -------- EXTRACT --------
 
     if (data.problem && !state.problem) state.problem = data.problem;
     if (data.name && !state.name) state.name = capitalize(data.name);
@@ -239,11 +273,7 @@ app.post("/chat", async (req, res) => {
     }
 
     if (!state.time && data.time) {
-      const result = analyzeTime(data.time);
-
-      if (result === "valid") {
-        state.time = data.time;
-      }
+      if (analyzeTime(data.time) === "valid") state.time = data.time;
     }
 
     // -------- BOOKING --------
@@ -251,11 +281,10 @@ app.post("/chat", async (req, res) => {
     if (state.problem && state.name && state.phone && state.address && state.time) {
       fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
       await sendBookingEmail(state);
-
       users[userId] = {};
 
       return res.json({
-        replies: ["Perfekt 👍 vi hör av oss snart! (du kan ändra tiden senare)"]
+        replies: ["Perfekt 👍 vi hör av oss snart!"]
       });
     }
 
@@ -263,68 +292,46 @@ app.post("/chat", async (req, res) => {
 
     if (!state.problem) {
       return res.json({
-        replies: ["Tja! Beskriv vad som hänt så löser vi det direkt 👍"]
+        replies: ["Tja! Beskriv vad som hänt 👍"]
       });
     }
 
     if (state.problem && !state.asked) {
       state.asked = true;
-
       const reply = await generateReply(
         `Problem: ${state.problem}`,
-        "Ask a follow-up question"
+        "Ask follow-up"
       );
-
       return res.json({ replies: [reply] });
     }
 
     if (!state.name) {
       state.lastQuestion = "name";
-
-      const reply = await generateReply(
-        state.problem,
-        "Ask for name"
-      );
-
-      return res.json({ replies: [reply] });
+      return res.json({ replies: ["Vad heter du? 👍"] });
     }
 
     if (!state.phone) {
       state.lastQuestion = "phone";
-
-      const reply = await generateReply(
-        state.name,
-        "Ask for phone"
-      );
-
-      return res.json({ replies: [reply] });
+      return res.json({
+        replies: [`Toppen ${state.name} 👍 vilket nummer når vi dig på?`]
+      });
     }
 
     if (!state.address) {
       state.lastQuestion = "address";
-
-      const reply = await generateReply(
-        state.name,
-        "Ask for address"
-      );
-
-      return res.json({ replies: [reply] });
+      return res.json({
+        replies: ["Vilken adress gäller det?"]
+      });
     }
 
     if (!state.time) {
       state.lastQuestion = "time";
-
-      const reply = await generateReply(
-        state.name,
-        "Ask for booking time"
-      );
-
-      return res.json({ replies: [reply] });
+      return res.json({
+        replies: ["När passar det bäst? (t.ex. imorgon kl 15)"]
+      });
     }
 
-    return res.json({
-      replies: ["Berätta lite mer 👍"]
-    });
+    return res.json({ replies: ["Berätta lite mer 👍"] });
 
   } catch (err) {
     console.error(err);
