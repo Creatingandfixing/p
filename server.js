@@ -54,10 +54,7 @@ async function aiExtract(message) {
       model: "gpt-4o-mini",
       temperature: 0,
       messages: [
-        {
-          role: "system",
-          content: "Return ONLY valid JSON."
-        },
+        { role: "system", content: "Return ONLY valid JSON." },
         {
           role: "user",
           content: `
@@ -83,7 +80,7 @@ Message: "${message}"
   }
 }
 
-// -------- AI REPLY (CONTROLLED 🔥) --------
+// -------- AI REPLY --------
 
 async function generateReply(state, message) {
   try {
@@ -94,13 +91,16 @@ async function generateReply(state, message) {
         {
           role: "system",
           content: `
-Du är en rörmokare som bokar jobb.
+Du är en rörmokare i Stockholm.
 
-REGLER:
-- Kort svar (max 2 meningar)
+TON:
+- Avslappnad, som SMS
+- Inte formell
+- Kort (1–2 meningar)
 - Ställ EN fråga
-- Börja ALDRIG om från början
-- Fortsätt där konversationen är
+
+MÅL:
+- Få bokning snabbt
 
 FLOW:
 1. Problem
@@ -109,11 +109,15 @@ FLOW:
 4. Adress
 5. Tid
 
-OM NÅGOT SAKNAS:
-→ fråga efter det
+REGLER:
+- Börja aldrig om
+- Om info saknas → fråga efter det
+- Om kunden tvekar → lugna + gör enkelt
 
-OM ALLT FINNS:
-→ bekräfta bokning
+EXEMPEL:
+"Tja 👍 vad har hänt?"
+"Okej 👍 vad heter du?"
+"Toppen 👍 vilket nummer?"
 
 INFO:
 Problem: ${state.problem || "saknas"}
@@ -123,10 +127,7 @@ Adress: ${state.address || "saknas"}
 Tid: ${state.time || "saknas"}
 `
         },
-        {
-          role: "user",
-          content: message
-        }
+        { role: "user", content: message }
       ]
     });
 
@@ -176,17 +177,29 @@ app.post("/chat", async (req, res) => {
     const msg = clean(raw);
     const userId = req.body.userId || Math.random().toString(36);
 
-    console.log("USER ID:", userId);
-    console.log("MESSAGE:", msg);
-
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
+    console.log("MSG:", msg);
+    console.log("STATE BEFORE:", state);
+
+    // -------- QUICK HANDLERS --------
+
+    if (msg.toLowerCase() === "hej" || msg.toLowerCase() === "tja") {
+      return res.json({
+        replies: ["Tja 👍 vad har hänt?"]
+      });
+    }
+
+    if (msg.toLowerCase() === "ja" && !state.problem) {
+      return res.json({
+        replies: ["Toppen 👍 vad gäller det?"]
+      });
+    }
+
+    // -------- AI EXTRACT --------
+
     const data = await aiExtract(msg);
-
-    console.log("AI DATA:", data);
-
-    // -------- EXTRACTION --------
 
     if (data.problem && !state.problem) state.problem = data.problem;
     if (data.name && !state.name) state.name = capitalize(data.name);
@@ -200,14 +213,15 @@ app.post("/chat", async (req, res) => {
 
     if (data.time && !state.time) state.time = data.time;
 
-    // 🔥 fallback (CRITICAL)
-    if (!state.problem && msg.length > 3) {
+    // -------- FALLBACK --------
+
+    if (!state.problem && msg.length > 3 && !msg.match(/hej|tja/i)) {
       state.problem = msg;
     }
 
-    console.log("STATE:", state);
+    console.log("STATE AFTER:", state);
 
-    // -------- BOOKING COMPLETE --------
+    // -------- BOOKING --------
 
     if (state.problem && state.name && state.phone && state.address && state.time) {
 
@@ -217,7 +231,7 @@ app.post("/chat", async (req, res) => {
 
       return res.json({
         replies: [
-          `Perfekt 👍 vi bokar in dig på ${state.time} och hör av oss snart!`
+          `Perfekt 👍 vi bokar in dig på ${state.time}. Du får en bekräftelse snart!`
         ]
       });
     }
