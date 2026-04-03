@@ -8,12 +8,18 @@ import OpenAI from "openai";
 import nodemailer from "nodemailer";
 
 const app = express();
+
+// 🔥 IMPORTANT FIXES
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" })); // prevent payload crashes
+
+// -------- OPENAI --------
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+// -------- MEMORY --------
 
 let users = {};
 
@@ -48,7 +54,9 @@ function isValidAddress(addr) {
 
 function safeParse(text) {
   try {
-    return JSON.parse(text.replace(/```json/g, "").replace(/```/g, "").trim());
+    return JSON.parse(
+      text.replace(/```json/g, "").replace(/```/g, "").trim()
+    );
   } catch {
     return {};
   }
@@ -92,35 +100,21 @@ async function generateReply(context, goal) {
           content: `
 Du är en erfaren svensk rörmokare som chattar med kunder.
 
-MÅL:
-- Hjälpa kunden snabbt
-- Få bokningen gjord
-
-VIKTIGA REGLER:
-- Säg ALDRIG "Hej" igen mitt i konversationen
-- Svara kort (1–2 meningar max)
-- Låt som en riktig person
-- Korrekt svenska
-- Upprepa inte kunden
-- Ställ EN tydlig fråga
-- För konversationen framåt
-
-BETEENDE:
-- Anta bokning
-- Minska friktion ("du kan alltid ändra sen")
-- Hantera tvekan naturligt
+Svara kort (1–2 meningar).
+Ställ EN fråga.
+Låt naturlig.
 
 Kontext: ${context}
 Mål: ${goal}
-
-Svara nu:
 `
         }
-      ]
+      ],
+      timeout: 8000 // 🔥 prevent serverless timeout crash
     });
 
     return res.choices?.[0]?.message?.content || "Okej 👍";
-  } catch {
+  } catch (err) {
+    console.error("AI ERROR:", err.message);
     return "Okej 👍";
   }
 }
@@ -152,7 +146,7 @@ Tid: ${data.time}
       `
     });
   } catch (err) {
-    console.error(err.message);
+    console.error("EMAIL ERROR:", err.message);
   }
 }
 
@@ -166,7 +160,7 @@ async function aiExtract(message) {
       messages: [{
         role: "user",
         content: `
-Extract:
+Extract JSON:
 
 {
   "problem": "",
@@ -178,11 +172,13 @@ Extract:
 
 Message: "${message}"
 `
-      }]
+      }],
+      timeout: 6000
     });
 
     return safeParse(res.choices?.[0]?.message?.content);
-  } catch {
+  } catch (err) {
+    console.error("EXTRACT ERROR:", err.message);
     return {};
   }
 }
@@ -198,13 +194,12 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // -------- TIME AWARENESS --------
-
     const now = Date.now();
     const last = state.lastMessageAt || now;
     const diff = now - last;
     state.lastMessageAt = now;
 
+    // 🔥 reset memory if too old
     if (diff > 1000 * 60 * 60 * 6) {
       users[userId] = {};
       return res.json({
@@ -212,55 +207,9 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    if (diff > 1000 * 60 * 30) {
-      state.asked = false;
-      return res.json({
-        replies: ["Ska vi fortsätta där vi var eller har något ändrats? 👍"]
-      });
-    }
-
     const data = await aiExtract(raw);
 
-    // -------- HANDLE HESITATION --------
-
-    if (
-      msg.includes("vet inte") ||
-      msg.includes("kanske") ||
-      msg.includes("sen")
-    ) {
-      if (!state.time) {
-        return res.json({
-          replies: [
-            "fattar 👍 vi kan bara lägga in en tid ungefär, du kan alltid ändra sen — vilken dag passar dig bäst?"
-          ]
-        });
-      }
-
-      if (!state.name) {
-        return res.json({
-          replies: ["ingen stress 👍 vad heter du så fixar vi resten sen?"]
-        });
-      }
-    }
-
-    // -------- CONTEXT --------
-
-    if (state.lastQuestion === "time") {
-      const result = analyzeTime(msg);
-      if (result === "valid") state.time = msg;
-      else return res.json({ replies: ["t.ex. imorgon kl 15 👍"] });
-    }
-
-    if (state.lastQuestion === "phone") {
-      let phone = normalizePhone(msg);
-      if (isValidPhone(phone)) state.phone = phone;
-    }
-
-    if (state.lastQuestion === "name" && !state.name) {
-      state.name = capitalize(msg);
-    }
-
-    // -------- EXTRACT --------
+    // -------- SAFE EXTRACTION --------
 
     if (data.problem && !state.problem) state.problem = data.problem;
     if (data.name && !state.name) state.name = capitalize(data.name);
@@ -280,7 +229,9 @@ app.post("/chat", async (req, res) => {
 
     if (state.problem && state.name && state.phone && state.address && state.time) {
       fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
+
       await sendBookingEmail(state);
+
       users[userId] = {};
 
       return res.json({
@@ -296,51 +247,49 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    if (state.problem && !state.asked) {
-      state.asked = true;
-      const reply = await generateReply(
-        `Problem: ${state.problem}`,
-        "Ask follow-up"
-      );
-      return res.json({ replies: [reply] });
-    }
-
     if (!state.name) {
-      state.lastQuestion = "name";
       return res.json({ replies: ["Vad heter du? 👍"] });
     }
 
     if (!state.phone) {
-      state.lastQuestion = "phone";
       return res.json({
-        replies: [`Toppen ${state.name} 👍 vilket nummer når vi dig på?`]
+        replies: [`Toppen ${state.name} 👍 vilket nummer?`]
       });
     }
 
     if (!state.address) {
-      state.lastQuestion = "address";
       return res.json({
         replies: ["Vilken adress gäller det?"]
       });
     }
 
     if (!state.time) {
-      state.lastQuestion = "time";
       return res.json({
-        replies: ["När passar det bäst? (t.ex. imorgon kl 15)"]
+        replies: ["När passar det? (t.ex. imorgon kl 15)"]
       });
     }
 
     return res.json({ replies: ["Berätta lite mer 👍"] });
 
   } catch (err) {
-    console.error(err);
-    res.json({ replies: ["Nåt blev fel"] });
+    console.error("SERVER ERROR:", err);
+
+    res.status(200).json({
+      replies: ["⚠️ Något gick fel, försök igen"]
+    });
   }
 });
 
+// -------- HEALTH CHECK --------
+
 app.get("/", (req, res) => {
-  res.send("🔥 Running");
+  res.send("🔥 Server running");
 });
 
-app.listen(process.env.PORT || 3000);
+// -------- START --------
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log("Server running on port", PORT);
+});
