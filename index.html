@@ -149,7 +149,6 @@
 <h1>Johanneshovrör</h1>
 <p>Välkommen! Vi hjälper dig med VVS.</p>
 
-<!-- Hint -->
 <div id="chat-hint" onclick="openChat()">
   Behöver du hjälp? Boka här 👋
 </div>
@@ -179,12 +178,18 @@ localStorage.setItem("userId", userId);
 // -------- HISTORY --------
 function loadHistory() {
   let history = JSON.parse(localStorage.getItem("chatHistory") || "[]");
-  history.forEach(msg => addMessage(msg.text, msg.sender, false));
+  history.slice(-50).forEach(msg => addMessage(msg.text, msg.sender, false));
 }
 
 function saveMessage(text, sender) {
   let history = JSON.parse(localStorage.getItem("chatHistory") || "[]");
+
   history.push({ text, sender });
+
+  if (history.length > 50) {
+    history = history.slice(-50);
+  }
+
   localStorage.setItem("chatHistory", JSON.stringify(history));
 }
 
@@ -203,7 +208,7 @@ function clearChat() {
   localStorage.removeItem("chatHistory");
   const box = document.getElementById("chat-box");
   box.innerHTML = "";
-  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂 (chatten sparas)", "bot");
+  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
 }
 
 function addMessage(text, sender, save = true) {
@@ -245,7 +250,7 @@ function removeTyping() {
 }
 
 // -------- FETCH RETRY --------
-async function fetchWithRetry(url, options, retries = 3) {
+async function fetchWithRetry(url, options, retries = 2) {
   try {
     let res = await fetch(url, options);
     if (!res.ok) throw new Error();
@@ -257,14 +262,6 @@ async function fetchWithRetry(url, options, retries = 3) {
     } else {
       throw err;
     }
-  }
-}
-
-// -------- SHOW REPLIES --------
-async function showReplies(replies) {
-  for (let msg of replies) {
-    await new Promise(r => setTimeout(r, 500));
-    addMessage(msg, "bot");
   }
 }
 
@@ -285,7 +282,8 @@ async function sendMessage() {
   showTyping();
 
   try {
-    fetch("https://ai-rormokare.onrender.com/").catch(()=>{});
+    // Wake backend (Render cold start)
+    await fetch("https://ai-rormokare.onrender.com/");
 
     const data = await fetchWithRetry(
       "https://ai-rormokare.onrender.com/chat",
@@ -297,10 +295,14 @@ async function sendMessage() {
     );
 
     removeTyping();
-    await showReplies(data.replies);
 
-  } catch {
-    setTimeout(() => sendMessage(), 1500);
+    for (let reply of data.replies) {
+      addMessage(reply, "bot");
+    }
+
+  } catch (err) {
+    removeTyping();
+    addMessage("⚠️ Kunde inte nå servern. Försök igen.", "bot");
   }
 
   isSending = false;
@@ -315,7 +317,7 @@ document.getElementById("chat-input").addEventListener("keypress", e => {
 loadHistory();
 
 if (JSON.parse(localStorage.getItem("chatHistory") || "[]").length === 0) {
-  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂 (chatten sparas)", "bot");
+  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
 }
 
 </script>

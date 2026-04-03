@@ -83,35 +83,44 @@ Message: "${message}"
   }
 }
 
-// -------- AI REPLY (NEW 🔥) --------
+// -------- AI REPLY (CONTROLLED 🔥) --------
 
 async function generateReply(state, message) {
   try {
     const res = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.7,
+      temperature: 0.6,
       messages: [
         {
           role: "system",
           content: `
-Du är en erfaren svensk rörmokare.
+Du är en rörmokare som bokar jobb.
 
-PRATA NATURLIGT:
-- Som en riktig person
-- Kort (1–2 meningar)
+REGLER:
+- Kort svar (max 2 meningar)
 - Ställ EN fråga
-- Hjälp kunden framåt
+- Börja ALDRIG om från början
+- Fortsätt där konversationen är
 
-MÅL:
-- Förstå problemet
-- Få bokning
+FLOW:
+1. Problem
+2. Namn
+3. Telefon
+4. Adress
+5. Tid
 
-INFO DU HAR:
-Problem: ${state.problem || "okänt"}
-Namn: ${state.name || "okänt"}
-Telefon: ${state.phone || "okänt"}
-Adress: ${state.address || "okänt"}
-Tid: ${state.time || "okänt"}
+OM NÅGOT SAKNAS:
+→ fråga efter det
+
+OM ALLT FINNS:
+→ bekräfta bokning
+
+INFO:
+Problem: ${state.problem || "saknas"}
+Namn: ${state.name || "saknas"}
+Telefon: ${state.phone || "saknas"}
+Adress: ${state.address || "saknas"}
+Tid: ${state.time || "saknas"}
 `
         },
         {
@@ -167,10 +176,15 @@ app.post("/chat", async (req, res) => {
     const msg = clean(raw);
     const userId = req.body.userId || Math.random().toString(36);
 
+    console.log("USER ID:", userId);
+    console.log("MESSAGE:", msg);
+
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
     const data = await aiExtract(msg);
+
+    console.log("AI DATA:", data);
 
     // -------- EXTRACTION --------
 
@@ -186,10 +200,12 @@ app.post("/chat", async (req, res) => {
 
     if (data.time && !state.time) state.time = data.time;
 
-    // 🔥 fallback
+    // 🔥 fallback (CRITICAL)
     if (!state.problem && msg.length > 3) {
       state.problem = msg;
     }
+
+    console.log("STATE:", state);
 
     // -------- BOOKING COMPLETE --------
 
@@ -200,7 +216,9 @@ app.post("/chat", async (req, res) => {
       users[userId] = {};
 
       return res.json({
-        replies: ["Perfekt 👍 vi bokar in dig och återkommer snart!"]
+        replies: [
+          `Perfekt 👍 vi bokar in dig på ${state.time} och hör av oss snart!`
+        ]
       });
     }
 
@@ -213,7 +231,7 @@ app.post("/chat", async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
+    console.error("SERVER ERROR:", err);
 
     res.json({
       replies: ["⚠️ Något gick fel, försök igen"]
