@@ -3,30 +3,24 @@ dotenv.config();
 
 import express from "express";
 import cors from "cors";
-import fs from "fs";
 import OpenAI from "openai";
 import nodemailer from "nodemailer";
 
 const app = express();
 
-// 🔥 IMPORTANT FIXES
 app.use(cors());
-app.use(express.json({ limit: "1mb" })); // prevent payload crashes
-
-// -------- OPENAI --------
+app.use(express.json({ limit: "1mb" }));
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
-
-// -------- MEMORY --------
 
 let users = {};
 
 // -------- HELPERS --------
 
 function clean(msg) {
-  return msg?.toString().toLowerCase().trim().slice(0, 500) || "";
+  return msg?.toString().trim().slice(0, 500) || "";
 }
 
 function capitalize(str) {
@@ -52,44 +46,46 @@ function isValidAddress(addr) {
   return typeof addr === "string" && addr.length > 4 && /\d/.test(addr);
 }
 
-function safeParse(text) {
+// -------- AI EXTRACT --------
+
+async function aiExtract(message) {
   try {
-    return JSON.parse(
-      text.replace(/```json/g, "").replace(/```/g, "").trim()
-    );
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: "Return ONLY valid JSON."
+        },
+        {
+          role: "user",
+          content: `
+{
+  "problem": "",
+  "name": "",
+  "phone": "",
+  "address": "",
+  "time": ""
+}
+
+Message: "${message}"
+`
+        }
+      ]
+    });
+
+    const text = res.choices?.[0]?.message?.content || "{}";
+    return JSON.parse(text);
+
   } catch {
     return {};
   }
 }
 
-// -------- TIME --------
+// -------- AI REPLY (NEW 🔥) --------
 
-function analyzeTime(text = "") {
-  text = text.toLowerCase();
-
-  const hasTime = /\d{1,2}/.test(text);
-
-  const hasDay =
-    text.includes("idag") ||
-    text.includes("imorgon") ||
-    text.includes("måndag") ||
-    text.includes("tisdag") ||
-    text.includes("onsdag") ||
-    text.includes("torsdag") ||
-    text.includes("fredag") ||
-    text.includes("lördag") ||
-    text.includes("söndag");
-
-  if (hasTime && hasDay) return "valid";
-  if (hasTime && !hasDay) return "missing_day";
-  if (!hasTime && hasDay) return "missing_time";
-
-  return "invalid";
-}
-
-// -------- AI --------
-
-async function generateReply(context, goal) {
+async function generateReply(state, message) {
   try {
     const res = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -98,23 +94,36 @@ async function generateReply(context, goal) {
         {
           role: "system",
           content: `
-Du är en erfaren svensk rörmokare som chattar med kunder.
+Du är en erfaren svensk rörmokare.
 
-Svara kort (1–2 meningar).
-Ställ EN fråga.
-Låt naturlig.
+PRATA NATURLIGT:
+- Som en riktig person
+- Kort (1–2 meningar)
+- Ställ EN fråga
+- Hjälp kunden framåt
 
-Kontext: ${context}
-Mål: ${goal}
+MÅL:
+- Förstå problemet
+- Få bokning
+
+INFO DU HAR:
+Problem: ${state.problem || "okänt"}
+Namn: ${state.name || "okänt"}
+Telefon: ${state.phone || "okänt"}
+Adress: ${state.address || "okänt"}
+Tid: ${state.time || "okänt"}
 `
+        },
+        {
+          role: "user",
+          content: message
         }
-      ],
-      timeout: 8000 // 🔥 prevent serverless timeout crash
+      ]
     });
 
     return res.choices?.[0]?.message?.content || "Okej 👍";
-  } catch (err) {
-    console.error("AI ERROR:", err.message);
+
+  } catch {
     return "Okej 👍";
   }
 }
@@ -150,39 +159,6 @@ Tid: ${data.time}
   }
 }
 
-// -------- AI EXTRACT --------
-
-async function aiExtract(message) {
-  try {
-    const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.2,
-      messages: [{
-        role: "user",
-        content: `
-Extract JSON:
-
-{
-  "problem": "",
-  "name": "",
-  "phone": "",
-  "address": "",
-  "time": ""
-}
-
-Message: "${message}"
-`
-      }],
-      timeout: 6000
-    });
-
-    return safeParse(res.choices?.[0]?.message?.content);
-  } catch (err) {
-    console.error("EXTRACT ERROR:", err.message);
-    return {};
-  }
-}
-
 // -------- MAIN --------
 
 app.post("/chat", async (req, res) => {
@@ -194,99 +170,62 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    const now = Date.now();
-    const last = state.lastMessageAt || now;
-    const diff = now - last;
-    state.lastMessageAt = now;
+    const data = await aiExtract(msg);
 
-    // 🔥 reset memory if too old
-    if (diff > 1000 * 60 * 60 * 6) {
-      users[userId] = {};
-      return res.json({
-        replies: ["Vi tappade nog tråden 😅 vad kan jag hjälpa dig med?"]
-      });
-    }
-
-    const data = await aiExtract(raw);
-
-    // -------- SAFE EXTRACTION --------
+    // -------- EXTRACTION --------
 
     if (data.problem && !state.problem) state.problem = data.problem;
     if (data.name && !state.name) state.name = capitalize(data.name);
 
-    let phone = normalizePhone(data.phone || raw);
+    let phone = normalizePhone(data.phone || msg);
     if (!state.phone && isValidPhone(phone)) state.phone = phone;
 
     if (data.address && !state.address && isValidAddress(data.address)) {
       state.address = capitalize(data.address);
     }
 
-    if (!state.time && data.time) {
-      if (analyzeTime(data.time) === "valid") state.time = data.time;
+    if (data.time && !state.time) state.time = data.time;
+
+    // 🔥 fallback
+    if (!state.problem && msg.length > 3) {
+      state.problem = msg;
     }
 
-    // -------- BOOKING --------
+    // -------- BOOKING COMPLETE --------
 
     if (state.problem && state.name && state.phone && state.address && state.time) {
-      fs.appendFileSync("bookings.txt", JSON.stringify(state) + "\n");
 
       await sendBookingEmail(state);
 
       users[userId] = {};
 
       return res.json({
-        replies: ["Perfekt 👍 vi hör av oss snart!"]
+        replies: ["Perfekt 👍 vi bokar in dig och återkommer snart!"]
       });
     }
 
-    // -------- FLOW --------
+    // -------- AI RESPONSE --------
 
-    if (!state.problem) {
-      return res.json({
-        replies: ["Tja! Beskriv vad som hänt 👍"]
-      });
-    }
+    const reply = await generateReply(state, msg);
 
-    if (!state.name) {
-      return res.json({ replies: ["Vad heter du? 👍"] });
-    }
-
-    if (!state.phone) {
-      return res.json({
-        replies: [`Toppen ${state.name} 👍 vilket nummer?`]
-      });
-    }
-
-    if (!state.address) {
-      return res.json({
-        replies: ["Vilken adress gäller det?"]
-      });
-    }
-
-    if (!state.time) {
-      return res.json({
-        replies: ["När passar det? (t.ex. imorgon kl 15)"]
-      });
-    }
-
-    return res.json({ replies: ["Berätta lite mer 👍"] });
+    return res.json({
+      replies: [reply]
+    });
 
   } catch (err) {
-    console.error("SERVER ERROR:", err);
+    console.error(err);
 
-    res.status(200).json({
+    res.json({
       replies: ["⚠️ Något gick fel, försök igen"]
     });
   }
 });
 
-// -------- HEALTH CHECK --------
+// -------- HEALTH --------
 
 app.get("/", (req, res) => {
   res.send("🔥 Server running");
 });
-
-// -------- START --------
 
 const PORT = process.env.PORT || 3000;
 
