@@ -94,13 +94,16 @@ async function generateReply(state, message) {
 Du är en rörmokare i Stockholm.
 
 TON:
-- Avslappnad, som SMS
+- Avslappnad (som SMS)
 - Inte formell
-- Kort (1–2 meningar)
+- Max 1–2 meningar
 - Ställ EN fråga
 
-MÅL:
-- Få bokning snabbt
+REGLER:
+- Säg aldrig "hej/tja" igen efter första meddelandet
+- Bekräfta problemet kort först
+- Börja aldrig om
+- Om tvekan → "du kan ändra sen"
 
 FLOW:
 1. Problem
@@ -108,16 +111,6 @@ FLOW:
 3. Telefon
 4. Adress
 5. Tid
-
-REGLER:
-- Börja aldrig om
-- Om info saknas → fråga efter det
-- Om kunden tvekar → lugna + gör enkelt
-
-EXEMPEL:
-"Tja 👍 vad har hänt?"
-"Okej 👍 vad heter du?"
-"Toppen 👍 vilket nummer?"
 
 INFO:
 Problem: ${state.problem || "saknas"}
@@ -152,6 +145,8 @@ const transporter = nodemailer.createTransport({
 
 async function sendBookingEmail(data) {
   try {
+    console.log("SENDING OWNER EMAIL:", data);
+
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
@@ -164,8 +159,37 @@ Adress: ${data.address}
 Tid: ${data.time}
       `
     });
+
   } catch (err) {
     console.error("EMAIL ERROR:", err.message);
+  }
+}
+
+async function sendCustomerConfirmation(data) {
+  try {
+    console.log("SENDING CUSTOMER CONFIRMATION");
+
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: process.env.EMAIL_USER, // change later if you collect email
+      subject: "Bekräftelse på bokning",
+      text: `
+Hej ${data.name}!
+
+Vi har bokat in dig:
+
+🛠 ${data.problem}
+📍 ${data.address}
+🕒 ${data.time}
+
+Vi hör av oss innan 👍
+
+/ Johanneshovrör
+      `
+    });
+
+  } catch (err) {
+    console.error("CUSTOMER EMAIL ERROR:", err.message);
   }
 }
 
@@ -181,7 +205,6 @@ app.post("/chat", async (req, res) => {
     let state = users[userId];
 
     console.log("MSG:", msg);
-    console.log("STATE BEFORE:", state);
 
     // -------- QUICK HANDLERS --------
 
@@ -219,13 +242,16 @@ app.post("/chat", async (req, res) => {
       state.problem = msg;
     }
 
-    console.log("STATE AFTER:", state);
+    console.log("STATE:", state);
 
     // -------- BOOKING --------
 
     if (state.problem && state.name && state.phone && state.address && state.time) {
 
+      console.log("BOOKING COMPLETE:", state);
+
       await sendBookingEmail(state);
+      await sendCustomerConfirmation(state);
 
       users[userId] = {};
 
