@@ -20,7 +20,7 @@ let users = {};
 // -------- HELPERS --------
 
 function clean(msg) {
-  return msg?.toString().trim().slice(0, 500) || "";
+  return msg?.toString().trim().toLowerCase().slice(0, 500) || "";
 }
 
 function capitalize(str) {
@@ -94,23 +94,28 @@ async function generateReply(state, message) {
 Du är en rörmokare i Stockholm.
 
 TON:
-- Avslappnad (som SMS)
-- Inte formell
+- Avslappnad
+- Som SMS
 - Max 1–2 meningar
 - Ställ EN fråga
 
 REGLER:
-- Säg aldrig "hej/tja" igen efter första meddelandet
-- Bekräfta problemet kort först
-- Börja aldrig om
-- Om tvekan → "du kan ändra sen"
+- Hälsa aldrig igen
+- Bekräfta problemet kort
+- Ställ smart följdfråga först
+
+HANTERA TVEKAN:
+- Lugna ("ingen stress")
+- Gör det enkelt
+- Erbjud kontakt (ring upp)
 
 FLOW:
 1. Problem
-2. Namn
-3. Telefon
-4. Adress
-5. Tid
+2. Smart följdfråga
+3. Namn
+4. Telefon
+5. Adress
+6. Tid
 
 INFO:
 Problem: ${state.problem || "saknas"}
@@ -144,53 +149,37 @@ const transporter = nodemailer.createTransport({
 });
 
 async function sendBookingEmail(data) {
-  try {
-    console.log("SENDING OWNER EMAIL:", data);
+  console.log("BOOKING EMAIL:", data);
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
-      subject: "🚨 Ny VVS Bokning",
-      text: `
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
+    subject: "🚨 Ny Bokning",
+    text: `
 Problem: ${data.problem}
 Namn: ${data.name}
 Telefon: ${data.phone}
 Adress: ${data.address}
 Tid: ${data.time}
-      `
-    });
-
-  } catch (err) {
-    console.error("EMAIL ERROR:", err.message);
-  }
+    `
+  });
 }
 
-async function sendCustomerConfirmation(data) {
-  try {
-    console.log("SENDING CUSTOMER CONFIRMATION");
+async function sendCallRequest(data) {
+  console.log("CALL REQUEST:", data);
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: process.env.EMAIL_USER, // change later if you collect email
-      subject: "Bekräftelse på bokning",
-      text: `
-Hej ${data.name}!
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
+    subject: "📞 Ring upp kund",
+    text: `
+Kund vill bli uppringd!
 
-Vi har bokat in dig:
-
-🛠 ${data.problem}
-📍 ${data.address}
-🕒 ${data.time}
-
-Vi hör av oss innan 👍
-
-/ Johanneshovrör
-      `
-    });
-
-  } catch (err) {
-    console.error("CUSTOMER EMAIL ERROR:", err.message);
-  }
+Namn: ${data.name || "okänd"}
+Telefon: ${data.phone || "saknas"}
+Problem: ${data.problem || "okänt"}
+    `
+  });
 }
 
 // -------- MAIN --------
@@ -206,28 +195,51 @@ app.post("/chat", async (req, res) => {
 
     console.log("MSG:", msg);
 
-    // -------- QUICK HANDLERS --------
+    // -------- GREETING --------
 
-    if (msg.toLowerCase() === "hej" || msg.toLowerCase() === "tja") {
+    if (msg === "hej" || msg === "tja") {
       return res.json({
         replies: ["Tja 👍 vad har hänt?"]
       });
     }
 
-    if (msg.toLowerCase() === "ja" && !state.problem) {
+    // -------- CONTACT REQUEST --------
+
+    if (msg.match(/ring|ringa|kontakta/i)) {
+      await sendCallRequest(state);
+
       return res.json({
-        replies: ["Toppen 👍 vad gäller det?"]
+        replies: [
+          "Perfekt 👍 vi ringer upp dig så snart vi kan!"
+        ]
       });
+    }
+
+    // -------- HESITATION HANDLING --------
+
+    if (msg.match(/vet inte|kanske|sen/i)) {
+
+      if (!state.problem) {
+        return res.json({
+          replies: ["Ingen stress 👍 vad är det som strular?"]
+        });
+      }
+
+      if (state.problem && !state.name) {
+        return res.json({
+          replies: ["Lugnt 👍 vill du att vi ringer dig istället?"]
+        });
+      }
     }
 
     // -------- AI EXTRACT --------
 
-    const data = await aiExtract(msg);
+    const data = await aiExtract(raw);
 
     if (data.problem && !state.problem) state.problem = data.problem;
     if (data.name && !state.name) state.name = capitalize(data.name);
 
-    let phone = normalizePhone(data.phone || msg);
+    let phone = normalizePhone(data.phone || raw);
     if (!state.phone && isValidPhone(phone)) state.phone = phone;
 
     if (data.address && !state.address && isValidAddress(data.address)) {
@@ -248,23 +260,20 @@ app.post("/chat", async (req, res) => {
 
     if (state.problem && state.name && state.phone && state.address && state.time) {
 
-      console.log("BOOKING COMPLETE:", state);
-
       await sendBookingEmail(state);
-      await sendCustomerConfirmation(state);
 
       users[userId] = {};
 
       return res.json({
         replies: [
-          `Perfekt 👍 vi bokar in dig på ${state.time}. Du får en bekräftelse snart!`
+          `Perfekt 👍 vi bokar in dig på ${state.time}. Vi hör av oss snart!`
         ]
       });
     }
 
     // -------- AI RESPONSE --------
 
-    const reply = await generateReply(state, msg);
+    const reply = await generateReply(state, raw);
 
     return res.json({
       replies: [reply]
@@ -274,7 +283,7 @@ app.post("/chat", async (req, res) => {
     console.error("SERVER ERROR:", err);
 
     res.json({
-      replies: ["⚠️ Något gick fel, försök igen"]
+      replies: ["⚠️ Något gick fel"]
     });
   }
 });
@@ -285,8 +294,4 @@ app.get("/", (req, res) => {
   res.send("🔥 Server running");
 });
 
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
-});
+app.listen(process.env.PORT || 3000);
