@@ -11,7 +11,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-// -------- CONFIG (SELLABLE 🔥) --------
+// -------- CONFIG --------
 
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "Rörmokare";
 const OWNER_EMAIL = process.env.BOOKING_EMAIL || process.env.EMAIL_USER;
@@ -55,6 +55,10 @@ function isValidAddress(addr) {
   return typeof addr === "string" && addr.length > 4 && /\d/.test(addr);
 }
 
+function detectTime(text = "") {
+  return /\d{1,2}(:\d{2})?|idag|imorgon|måndag|tisdag|onsdag|torsdag|fredag|lördag|söndag/i.test(text);
+}
+
 // -------- AI EXTRACT --------
 
 async function aiExtract(message) {
@@ -95,7 +99,7 @@ async function generateReply(state, message) {
   try {
     const res = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.6,
+      temperature: 0.4,
       messages: [
         {
           role: "system",
@@ -122,13 +126,16 @@ HANTERA TVEKAN:
 - Gör det enkelt
 - Erbjud att ringa upp
 
+VIKTIGT:
+- Om FollowUpDone = yes → ställ INTE fler frågor om problemet
+
 FLOW:
 1. Problem
 2. 1 följdfråga
 3. Namn
 4. Telefon
 5. Adress
-5. Tid
+6. Tid
 
 INFO:
 Problem: ${state.problem || "saknas"}
@@ -136,6 +143,7 @@ Namn: ${state.name || "saknas"}
 Telefon: ${state.phone || "saknas"}
 Adress: ${state.address || "saknas"}
 Tid: ${state.time || "saknas"}
+FollowUpDone: ${state.followUpDone ? "yes" : "no"}
 `
         },
         { role: "user", content: message }
@@ -169,8 +177,6 @@ async function sendBookingEmail(data) {
     to: OWNER_EMAIL,
     subject: `🚨 Ny bokning - ${BUSINESS_NAME}`,
     text: `
-Ny bokning:
-
 Problem: ${data.problem}
 Namn: ${data.name}
 Telefon: ${data.phone}
@@ -186,8 +192,6 @@ async function sendCallRequest(data) {
     to: OWNER_EMAIL,
     subject: `📞 Ring upp kund - ${BUSINESS_NAME}`,
     text: `
-Kund vill bli uppringd:
-
 Namn: ${data.name || "okänd"}
 Telefon: ${data.phone || "saknas"}
 Problem: ${data.problem || "okänt"}
@@ -210,7 +214,7 @@ app.post("/chat", async (req, res) => {
 
     if (msg === "hej" || msg === "tja") {
       return res.json({
-        replies: [`Tja 👍 vad kan vi hjälpa dig med?`]
+        replies: ["Tja 👍 vad har hänt?"]
       });
     }
 
@@ -263,6 +267,47 @@ app.post("/chat", async (req, res) => {
 
     if (data.time && !state.time) state.time = data.time;
 
+    // -------- TIME FALLBACK --------
+
+    if (!state.time && detectTime(raw)) {
+      state.time = raw;
+    }
+
+    // -------- FOLLOW-UP CONTROL --------
+
+    if (state.problem && !state.followUpDone) {
+      state.followUpDone = true;
+    }
+
+    // -------- FORCE FLOW --------
+
+    if (state.problem && state.followUpDone) {
+
+      if (!state.name) {
+        return res.json({
+          replies: ["Okej 👍 vad heter du?"]
+        });
+      }
+
+      if (state.name && !state.phone) {
+        return res.json({
+          replies: [`Toppen ${state.name} 👍 vilket nummer når vi dig på?`]
+        });
+      }
+
+      if (state.phone && !state.address) {
+        return res.json({
+          replies: ["Vilken adress gäller det?"]
+        });
+      }
+
+      if (state.address && !state.time) {
+        return res.json({
+          replies: ["När passar det bäst? 👍"]
+        });
+      }
+    }
+
     // -------- FALLBACK --------
 
     if (!state.problem && msg.length > 3 && !msg.match(/hej|tja/i)) {
@@ -284,7 +329,7 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // -------- AI --------
+    // -------- AI RESPONSE --------
 
     const reply = await generateReply(state, raw);
 
