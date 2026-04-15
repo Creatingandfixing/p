@@ -55,8 +55,49 @@ function isValidAddress(addr) {
   return typeof addr === "string" && addr.length > 4 && /\d/.test(addr);
 }
 
-function detectTime(text = "") {
-  return /\d{1,2}(:\d{2})?|idag|imorgon|måndag|tisdag|onsdag|torsdag|fredag|lördag|söndag/i.test(text);
+// -------- SWEDISH DATE PARSER --------
+
+function parseSwedishDateTime(text) {
+  const now = new Date();
+  let date = new Date(now);
+
+  // DAY
+  if (/imorgon/i.test(text)) {
+    date.setDate(now.getDate() + 1);
+  } else if (/idag/i.test(text)) {
+    // same day
+  } else {
+    const days = {
+      söndag: 0,
+      måndag: 1,
+      tisdag: 2,
+      onsdag: 3,
+      torsdag: 4,
+      fredag: 5,
+      lördag: 6
+    };
+
+    for (let day in days) {
+      if (text.includes(day)) {
+        const target = days[day];
+        const diff = (target - now.getDay() + 7) % 7 || 7;
+        date.setDate(now.getDate() + diff);
+      }
+    }
+  }
+
+  // TIME
+  const match = text.match(/(\d{1,2})(?::(\d{2}))?/);
+  if (!match) return null;
+
+  const hours = parseInt(match[1]);
+  const minutes = parseInt(match[2] || "0");
+
+  date.setHours(hours);
+  date.setMinutes(minutes);
+  date.setSeconds(0);
+
+  return date;
 }
 
 // -------- AI EXTRACT --------
@@ -85,8 +126,7 @@ Message: "${message}"
       ]
     });
 
-    const text = res.choices?.[0]?.message?.content || "{}";
-    return JSON.parse(text);
+    return JSON.parse(res.choices?.[0]?.message?.content || "{}");
 
   } catch {
     return {};
@@ -104,38 +144,16 @@ async function generateReply(state, message) {
         {
           role: "system",
           content: `
-Du jobbar för ${BUSINESS_NAME} och chattar med kunder.
+Du jobbar för ${BUSINESS_NAME}.
 
-TON:
-- Avslappnad
-- Kort (1–2 meningar)
-- Som SMS
+- Kort svar (1–2 meningar)
 - Ställ EN fråga
+- Låt naturlig
 
-REGLER:
-- Hälsa aldrig igen
-- Börja aldrig om
-- Upprepa inte kunden
+- Ställ MAX 1 följdfråga om problemet
+- När problem förstått → gå vidare direkt
 
-PROBLEM:
-- Ställ MAX EN följdfråga
-- När du fått svar → gå vidare direkt
-
-HANTERA TVEKAN:
-- Lugna
-- Gör det enkelt
-- Erbjud att ringa upp
-
-VIKTIGT:
-- Om FollowUpDone = yes → ställ INTE fler frågor om problemet
-
-FLOW:
-1. Problem
-2. 1 följdfråga
-3. Namn
-4. Telefon
-5. Adress
-6. Tid
+- Om FollowUpDone = yes → fråga INTE mer om problemet
 
 INFO:
 Problem: ${state.problem || "saknas"}
@@ -169,8 +187,6 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// -------- LEADS --------
-
 async function sendBookingEmail(data) {
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
@@ -181,7 +197,7 @@ Problem: ${data.problem}
 Namn: ${data.name}
 Telefon: ${data.phone}
 Adress: ${data.address}
-Tid: ${data.time}
+Tid: ${new Date(data.time).toLocaleString("sv-SE")}
     `
   });
 }
@@ -210,49 +226,22 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // -------- GREETING --------
-
+    // GREETING
     if (msg === "hej" || msg === "tja") {
       return res.json({
         replies: ["Tja 👍 vad har hänt?"]
       });
     }
 
-    // -------- CONTACT --------
-
-    if (msg.match(/\b(ring|ringa|ring upp|kontakta)\b/i)) {
+    // CONTACT
+    if (msg.match(/\b(ring|kontakta)\b/i)) {
       await sendCallRequest(state);
-
       return res.json({
         replies: ["Perfekt 👍 vi ringer upp dig snart!"]
       });
     }
 
-    // -------- HESITATION --------
-
-    if (msg.match(/vet inte|kanske|sen/i)) {
-
-      if (!state.problem) {
-        return res.json({
-          replies: ["Ingen stress 👍 vad är det som strular?"]
-        });
-      }
-
-      if (state.problem && !state.name) {
-        return res.json({
-          replies: ["Lugnt 👍 vill du att vi ringer dig istället?"]
-        });
-      }
-
-      if (state.name && !state.phone) {
-        return res.json({
-          replies: ["Vilket nummer når vi dig på så fixar vi resten 👍"]
-        });
-      }
-    }
-
-    // -------- AI EXTRACT --------
-
+    // AI EXTRACT
     const data = await aiExtract(raw);
 
     if (data.problem && !state.problem) state.problem = data.problem;
@@ -265,57 +254,51 @@ app.post("/chat", async (req, res) => {
       state.address = capitalize(data.address);
     }
 
-    if (data.time && !state.time) state.time = data.time;
+    // -------- TIME (SMART) --------
 
-    // -------- TIME FALLBACK --------
+    if (!state.time) {
 
-    if (!state.time && detectTime(raw)) {
-      state.time = raw;
+      const parsed = parseSwedishDateTime(raw);
+
+      if (parsed) {
+        state.time = parsed.toISOString();
+      }
+
+      else if (/idag|imorgon|måndag|tisdag|onsdag|torsdag|fredag|lördag|söndag/i.test(raw)) {
+        return res.json({
+          replies: ["Vilken tid? 👍 (t.ex. kl 15)"]
+        });
+      }
+
+      else if (state.address) {
+        return res.json({
+          replies: ["När passar det? 👍 (t.ex. imorgon kl 15)"]
+        });
+      }
     }
 
-    // -------- FOLLOW-UP CONTROL --------
-
+    // FOLLOW-UP CONTROL
     if (state.problem && !state.followUpDone) {
       state.followUpDone = true;
     }
 
-    // -------- FORCE FLOW --------
-
+    // FORCE FLOW
     if (state.problem && state.followUpDone) {
 
       if (!state.name) {
-        return res.json({
-          replies: ["Okej 👍 vad heter du?"]
-        });
+        return res.json({ replies: ["Okej 👍 vad heter du?"] });
       }
 
       if (state.name && !state.phone) {
-        return res.json({
-          replies: [`Toppen ${state.name} 👍 vilket nummer når vi dig på?`]
-        });
+        return res.json({ replies: [`Toppen ${state.name} 👍 nummer?`] });
       }
 
       if (state.phone && !state.address) {
-        return res.json({
-          replies: ["Vilken adress gäller det?"]
-        });
-      }
-
-      if (state.address && !state.time) {
-        return res.json({
-          replies: ["När passar det bäst? 👍"]
-        });
+        return res.json({ replies: ["Vilken adress gäller det?"] });
       }
     }
 
-    // -------- FALLBACK --------
-
-    if (!state.problem && msg.length > 3 && !msg.match(/hej|tja/i)) {
-      state.problem = msg;
-    }
-
-    // -------- BOOKING --------
-
+    // BOOKING
     if (state.problem && state.name && state.phone && state.address && state.time) {
 
       await sendBookingEmail(state);
@@ -324,13 +307,12 @@ app.post("/chat", async (req, res) => {
 
       return res.json({
         replies: [
-          `Perfekt 👍 vi bokar in dig på ${state.time}. Vi hör av oss snart!`
+          `Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")}`
         ]
       });
     }
 
-    // -------- AI RESPONSE --------
-
+    // AI RESPONSE
     const reply = await generateReply(state, raw);
 
     return res.json({
@@ -339,10 +321,7 @@ app.post("/chat", async (req, res) => {
 
   } catch (err) {
     console.error(err);
-
-    res.json({
-      replies: ["⚠️ Något gick fel"]
-    });
+    res.json({ replies: ["⚠️ Något gick fel"] });
   }
 });
 
