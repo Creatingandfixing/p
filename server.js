@@ -270,4 +270,22 @@ app.get("/", (req, res) => {
   res.send(`${BUSINESS_NAME} API running`);
 });
 
+app.get("/test-email", async (req, res) => {
+  try {
+    console.log("TEST EMAIL TRIGGERED");
+
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: process.env.EMAIL_USER,
+      subject: "TEST EMAIL",
+      text: "It works!"
+    });
+
+    res.send("Email sent!");
+  } catch (err) {
+    console.error(err);
+    res.send("Email failed");
+  }
+});
+
 app.listen(process.env.PORT || 3000);
