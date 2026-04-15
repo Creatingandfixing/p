@@ -283,9 +283,8 @@ app.get("/test-email", async (req, res) => {
 
     res.send("Email sent!");
   } catch (err) {
-    console.error(err);
-    res.send("Email failed");
+    console.error("EMAIL ERROR FULL:", err); // 👈 THIS LINE
+    res.send("Email failed: " + err.message);
   }
 });
-
 app.listen(process.env.PORT || 3000);
