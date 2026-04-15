@@ -114,7 +114,7 @@ function parseSwedishDateTime(text) {
 // -------- EMAIL --------
 
 const transporter = nodemailer.createTransport({
-  host: "smtp.one.com",
+  host: "send.one.com",
   port: 587,
   secure: false,
   auth: {
