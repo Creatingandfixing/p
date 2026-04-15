@@ -11,9 +11,18 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
+// -------- CONFIG (SELLABLE 🔥) --------
+
+const BUSINESS_NAME = process.env.BUSINESS_NAME || "Rörmokare";
+const OWNER_EMAIL = process.env.BOOKING_EMAIL || process.env.EMAIL_USER;
+
+// -------- OPENAI --------
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+// -------- MEMORY --------
 
 let users = {};
 
@@ -91,78 +100,37 @@ async function generateReply(state, message) {
         {
           role: "system",
           content: `
-Du är en erfaren rörmokare i Stockholm som chattar med kunder.
+Du jobbar för ${BUSINESS_NAME} och chattar med kunder.
 
 TON:
-- Avslappnad (som SMS)
-- Låter som en riktig hantverkare
+- Avslappnad
 - Kort (1–2 meningar)
+- Som SMS
 - Ställ EN fråga
 
-MÅL:
-- Förstå problemet snabbt
-- Sedan boka så smidigt som möjligt
-
 REGLER:
-- Säg aldrig "hej" eller "tja" igen efter första meddelandet
-- Börja aldrig om konversationen
+- Hälsa aldrig igen
+- Börja aldrig om
 - Upprepa inte kunden
 
-PROBLEMLOGIK:
-
-- Ställ MAX EN följdfråga om problemet
-- När du fått svar → SLUTA analysera
-- Gå vidare direkt till bokning
-
-- Fokusera inte på detaljerad felsökning
-- Du bokar, inte löser allt i chatten
-
-EXEMPEL:
-
-"Min dusch läcker"
-→ "Okej 👍 droppar det eller rinner det hela tiden?"
-
-"Det rinner hela tiden"
-→ "Okej 👍 då fixar vi det — vad heter du?"
-
----
+PROBLEM:
+- Ställ MAX EN följdfråga
+- När du fått svar → gå vidare direkt
 
 HANTERA TVEKAN:
-
-Om kunden säger:
-"vet inte", "kanske", "sen"
-
-→ Lugna + gör det enkelt + fortsätt framåt
-
-EXEMPEL:
-
-"ingen stress 👍 vi kan bara lägga in något preliminärt — vad gäller det?"
-
-"lugnt 👍 vill du att vi ringer dig istället?"
-
----
+- Lugna
+- Gör det enkelt
+- Erbjud att ringa upp
 
 FLOW:
-
 1. Problem
-2. MAX 1 följdfråga
+2. 1 följdfråga
 3. Namn
 4. Telefon
 5. Adress
-6. Tid
-
----
-
-VIKTIGT:
-
-- Ställ aldrig fler än 1 följdfråga om problemet
-- Fastna aldrig i analys
-- När problemet är tydligt → gå vidare direkt
-
----
+5. Tid
 
 INFO:
-
 Problem: ${state.problem || "saknas"}
 Namn: ${state.name || "saknas"}
 Telefon: ${state.phone || "saknas"}
@@ -184,8 +152,8 @@ Tid: ${state.time || "saknas"}
 // -------- EMAIL --------
 
 const transporter = nodemailer.createTransport({
-  host: "smtp.one.com",
-  port: 587,
+  host: process.env.SMTP_HOST || "smtp.one.com",
+  port: process.env.SMTP_PORT || 587,
   secure: false,
   auth: {
     user: process.env.EMAIL_USER,
@@ -193,14 +161,16 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-async function sendBookingEmail(data) {
-  console.log("BOOKING EMAIL:", data);
+// -------- LEADS --------
 
+async function sendBookingEmail(data) {
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
-    to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
-    subject: "🚨 Ny Bokning",
+    to: OWNER_EMAIL,
+    subject: `🚨 Ny bokning - ${BUSINESS_NAME}`,
     text: `
+Ny bokning:
+
 Problem: ${data.problem}
 Namn: ${data.name}
 Telefon: ${data.phone}
@@ -211,14 +181,12 @@ Tid: ${data.time}
 }
 
 async function sendCallRequest(data) {
-  console.log("CALL REQUEST:", data);
-
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
-    to: process.env.BOOKING_EMAIL || process.env.EMAIL_USER,
-    subject: "📞 Ring upp kund",
+    to: OWNER_EMAIL,
+    subject: `📞 Ring upp kund - ${BUSINESS_NAME}`,
     text: `
-Kund vill bli uppringd!
+Kund vill bli uppringd:
 
 Namn: ${data.name || "okänd"}
 Telefon: ${data.phone || "saknas"}
@@ -238,29 +206,25 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    console.log("MSG:", msg);
-
     // -------- GREETING --------
 
     if (msg === "hej" || msg === "tja") {
       return res.json({
-        replies: ["Tja 👍 vad har hänt?"]
+        replies: [`Tja 👍 vad kan vi hjälpa dig med?`]
       });
     }
 
-    // -------- CONTACT REQUEST --------
+    // -------- CONTACT --------
 
-    if (msg.match(/ring|ringa|kontakta/i)) {
+    if (msg.match(/\b(ring|ringa|ring upp|kontakta)\b/i)) {
       await sendCallRequest(state);
 
       return res.json({
-        replies: [
-          "Perfekt 👍 vi ringer upp dig så snart vi kan!"
-        ]
+        replies: ["Perfekt 👍 vi ringer upp dig snart!"]
       });
     }
 
-    // -------- HESITATION HANDLING --------
+    // -------- HESITATION --------
 
     if (msg.match(/vet inte|kanske|sen/i)) {
 
@@ -273,6 +237,12 @@ app.post("/chat", async (req, res) => {
       if (state.problem && !state.name) {
         return res.json({
           replies: ["Lugnt 👍 vill du att vi ringer dig istället?"]
+        });
+      }
+
+      if (state.name && !state.phone) {
+        return res.json({
+          replies: ["Vilket nummer når vi dig på så fixar vi resten 👍"]
         });
       }
     }
@@ -299,15 +269,13 @@ app.post("/chat", async (req, res) => {
       state.problem = msg;
     }
 
-    console.log("STATE:", state);
-
     // -------- BOOKING --------
 
     if (state.problem && state.name && state.phone && state.address && state.time) {
 
       await sendBookingEmail(state);
 
-      users[userId] = {};
+      delete users[userId];
 
       return res.json({
         replies: [
@@ -316,7 +284,7 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // -------- AI RESPONSE --------
+    // -------- AI --------
 
     const reply = await generateReply(state, raw);
 
@@ -325,7 +293,7 @@ app.post("/chat", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("SERVER ERROR:", err);
+    console.error(err);
 
     res.json({
       replies: ["⚠️ Något gick fel"]
@@ -336,7 +304,7 @@ app.post("/chat", async (req, res) => {
 // -------- HEALTH --------
 
 app.get("/", (req, res) => {
-  res.send("🔥 Server running");
+  res.send(`${BUSINESS_NAME} API running`);
 });
 
 app.listen(process.env.PORT || 3000);
