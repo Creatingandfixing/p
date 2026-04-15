@@ -11,18 +11,12 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-// -------- CONFIG --------
-
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "Rörmokare";
 const OWNER_EMAIL = process.env.BOOKING_EMAIL || process.env.EMAIL_USER;
-
-// -------- OPENAI --------
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
-
-// -------- MEMORY --------
 
 let users = {};
 
@@ -55,131 +49,73 @@ function isValidAddress(addr) {
   return typeof addr === "string" && addr.length > 4 && /\d/.test(addr);
 }
 
-// -------- SWEDISH DATE PARSER --------
+// -------- SMART FOLLOW-UP (NEW 🔥) --------
+
+function smartFollowUp(problem = "") {
+  const text = problem.toLowerCase();
+
+  if (text.includes("läcker")) {
+    return "Okej 👍 droppar det lite eller rinner det konstant?";
+  }
+
+  if (text.includes("stopp")) {
+    return "Okej 👍 är det helt stopp eller rinner det undan lite?";
+  }
+
+  if (text.includes("inget vatten")) {
+    return "Okej 👍 är det helt dött eller bara lågt tryck?";
+  }
+
+  if (text.includes("tryck")) {
+    return "Okej 👍 har det blivit sämre nyligen eller alltid varit så?";
+  }
+
+  return "Okej 👍 kan du beskriva lite mer vad som händer?";
+}
+
+// -------- DATE PARSER --------
 
 function parseSwedishDateTime(text) {
   const now = new Date();
   let date = new Date(now);
 
-  // DAY
   if (/imorgon/i.test(text)) {
     date.setDate(now.getDate() + 1);
-  } else if (/idag/i.test(text)) {
-    // same day
-  } else {
-    const days = {
-      söndag: 0,
-      måndag: 1,
-      tisdag: 2,
-      onsdag: 3,
-      torsdag: 4,
-      fredag: 5,
-      lördag: 6
-    };
+  }
 
-    for (let day in days) {
-      if (text.includes(day)) {
-        const target = days[day];
-        const diff = (target - now.getDay() + 7) % 7 || 7;
-        date.setDate(now.getDate() + diff);
-      }
+  const days = {
+    söndag: 0,
+    måndag: 1,
+    tisdag: 2,
+    onsdag: 3,
+    torsdag: 4,
+    fredag: 5,
+    lördag: 6
+  };
+
+  for (let day in days) {
+    if (text.includes(day)) {
+      const target = days[day];
+      const diff = (target - now.getDay() + 7) % 7 || 7;
+      date.setDate(now.getDate() + diff);
     }
   }
 
-  // TIME
   const match = text.match(/(\d{1,2})(?::(\d{2}))?/);
   if (!match) return null;
 
-  const hours = parseInt(match[1]);
-  const minutes = parseInt(match[2] || "0");
-
-  date.setHours(hours);
-  date.setMinutes(minutes);
+  date.setHours(parseInt(match[1]));
+  date.setMinutes(parseInt(match[2] || "0"));
   date.setSeconds(0);
 
   return date;
 }
 
-// -------- AI EXTRACT --------
-
-async function aiExtract(message) {
-  try {
-    const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      messages: [
-        { role: "system", content: "Return ONLY valid JSON." },
-        {
-          role: "user",
-          content: `
-{
-  "problem": "",
-  "name": "",
-  "phone": "",
-  "address": "",
-  "time": ""
-}
-
-Message: "${message}"
-`
-        }
-      ]
-    });
-
-    return JSON.parse(res.choices?.[0]?.message?.content || "{}");
-
-  } catch {
-    return {};
-  }
-}
-
-// -------- AI REPLY --------
-
-async function generateReply(state, message) {
-  try {
-    const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.4,
-      messages: [
-        {
-          role: "system",
-          content: `
-Du jobbar för ${BUSINESS_NAME}.
-
-- Kort svar (1–2 meningar)
-- Ställ EN fråga
-- Låt naturlig
-
-- Ställ MAX 1 följdfråga om problemet
-- När problem förstått → gå vidare direkt
-
-- Om FollowUpDone = yes → fråga INTE mer om problemet
-
-INFO:
-Problem: ${state.problem || "saknas"}
-Namn: ${state.name || "saknas"}
-Telefon: ${state.phone || "saknas"}
-Adress: ${state.address || "saknas"}
-Tid: ${state.time || "saknas"}
-FollowUpDone: ${state.followUpDone ? "yes" : "no"}
-`
-        },
-        { role: "user", content: message }
-      ]
-    });
-
-    return res.choices?.[0]?.message?.content || "Okej 👍";
-
-  } catch {
-    return "Okej 👍";
-  }
-}
-
 // -------- EMAIL --------
 
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || "smtp.one.com",
-  port: process.env.SMTP_PORT || 587,
+  host: "smtp.one.com",
+  port: 587,
   secure: false,
   auth: {
     user: process.env.EMAIL_USER,
@@ -206,7 +142,7 @@ async function sendCallRequest(data) {
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
     to: OWNER_EMAIL,
-    subject: `📞 Ring upp kund - ${BUSINESS_NAME}`,
+    subject: `📞 Ring upp kund`,
     text: `
 Namn: ${data.name || "okänd"}
 Telefon: ${data.phone || "saknas"}
@@ -228,95 +164,98 @@ app.post("/chat", async (req, res) => {
 
     // GREETING
     if (msg === "hej" || msg === "tja") {
-      return res.json({
-        replies: ["Tja 👍 vad har hänt?"]
-      });
+      return res.json({ replies: ["Tja 👍 vad har hänt?"] });
     }
 
     // CONTACT
     if (msg.match(/\b(ring|kontakta)\b/i)) {
       await sendCallRequest(state);
+      return res.json({ replies: ["Perfekt 👍 vi ringer upp dig!"] });
+    }
+
+    // -------- PROBLEM --------
+
+    if (!state.problem && msg.length > 3) {
+      state.problem = raw;
+
       return res.json({
-        replies: ["Perfekt 👍 vi ringer upp dig snart!"]
+        replies: [smartFollowUp(state.problem)]
       });
     }
 
-    // AI EXTRACT
-    const data = await aiExtract(raw);
+    // -------- AFTER FOLLOW-UP → MOVE ON --------
 
-    if (data.problem && !state.problem) state.problem = data.problem;
-    if (data.name && !state.name) state.name = capitalize(data.name);
-
-    let phone = normalizePhone(data.phone || raw);
-    if (!state.phone && isValidPhone(phone)) state.phone = phone;
-
-    if (data.address && !state.address && isValidAddress(data.address)) {
-      state.address = capitalize(data.address);
-    }
-
-    // -------- TIME (SMART) --------
-
-    if (!state.time) {
-
-      const parsed = parseSwedishDateTime(raw);
-
-      if (parsed) {
-        state.time = parsed.toISOString();
-      }
-
-      else if (/idag|imorgon|måndag|tisdag|onsdag|torsdag|fredag|lördag|söndag/i.test(raw)) {
-        return res.json({
-          replies: ["Vilken tid? 👍 (t.ex. kl 15)"]
-        });
-      }
-
-      else if (state.address) {
-        return res.json({
-          replies: ["När passar det? 👍 (t.ex. imorgon kl 15)"]
-        });
-      }
-    }
-
-    // FOLLOW-UP CONTROL
     if (state.problem && !state.followUpDone) {
       state.followUpDone = true;
     }
 
-    // FORCE FLOW
-    if (state.problem && state.followUpDone) {
+    // -------- NAME --------
 
-      if (!state.name) {
-        return res.json({ replies: ["Okej 👍 vad heter du?"] });
-      }
-
-      if (state.name && !state.phone) {
-        return res.json({ replies: [`Toppen ${state.name} 👍 nummer?`] });
-      }
-
-      if (state.phone && !state.address) {
-        return res.json({ replies: ["Vilken adress gäller det?"] });
-      }
-    }
-
-    // BOOKING
-    if (state.problem && state.name && state.phone && state.address && state.time) {
-
-      await sendBookingEmail(state);
-
-      delete users[userId];
-
+    if (!state.name) {
+      state.name = capitalize(raw);
       return res.json({
-        replies: [
-          `Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")}`
-        ]
+        replies: ["Toppen 👍 vilket nummer når vi dig på?"]
       });
     }
 
-    // AI RESPONSE
-    const reply = await generateReply(state, raw);
+    // -------- PHONE --------
+
+    if (!state.phone) {
+      const phone = normalizePhone(raw);
+
+      if (!isValidPhone(phone)) {
+        return res.json({
+          replies: ["Skriv ett giltigt nummer 👍"]
+        });
+      }
+
+      state.phone = phone;
+
+      return res.json({
+        replies: ["Vilken adress gäller det?"]
+      });
+    }
+
+    // -------- ADDRESS --------
+
+    if (!state.address) {
+      if (!isValidAddress(raw)) {
+        return res.json({
+          replies: ["Skriv en fullständig adress 👍"]
+        });
+      }
+
+      state.address = capitalize(raw);
+
+      return res.json({
+        replies: ["När passar det? 👍 (t.ex. imorgon kl 15)"]
+      });
+    }
+
+    // -------- TIME --------
+
+    if (!state.time) {
+      const parsed = parseSwedishDateTime(raw);
+
+      if (!parsed) {
+        return res.json({
+          replies: ["Ange tid 👍 (t.ex. kl 15)"]
+        });
+      }
+
+      state.time = parsed.toISOString();
+    }
+
+    // -------- BOOKING --------
+
+    await sendBookingEmail(state);
+
+    delete users[userId];
 
     return res.json({
-      replies: [reply]
+      replies: [
+        `Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")}`
+      ]
     });
 
   } catch (err) {
