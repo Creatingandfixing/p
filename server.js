@@ -249,22 +249,28 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // -------- CONTACT --------
+    // -------- CONTACT (FIXED 🔥)
 
-    if (intent === "contact") {
-      await sendCallRequest(state);
-      return res.json({
-        replies: ["Inga problem 👍 vi ringer upp dig så kollar vi på det"]
-      });
-    }
+if (intent === "contact") {
 
-    // -------- HESITATION --------
+  // if we already have phone → ask when
+  if (state.phone) {
+    state.awaitingCallTime = true;
+    saveMemory();
 
-    if (intent === "hesitation") {
-      return res.json({
-        replies: ["Ingen stress 👍 vi kan ta det när det passar dig — vad är det som strular?"]
-      });
-    }
+    return res.json({
+      replies: ["Absolut 👍 när kan du prata?"]
+    });
+  }
+
+  // if no phone → ask for it first
+  state.awaitingCallPhone = true;
+  saveMemory();
+
+  return res.json({
+    replies: ["Självklart 👍 vilket nummer når vi dig på?"]
+  });
+}
 
     // -------- QUESTIONS (MORE HUMAN) --------
 
@@ -371,6 +377,43 @@ app.post("/chat", async (req, res) => {
         replies: ["Vilken adress gäller det?"]
       });
     }
+
+    // -------- HANDLE CALL PHONE --------
+
+if (state.awaitingCallPhone) {
+
+  const phone = normalizePhone(raw);
+
+  if (!isValidPhone(phone)) {
+    return res.json({
+      replies: ["Skriv ett nummer så vi kan ringa 👍"]
+    });
+  }
+
+  state.phone = phone;
+  state.awaitingCallPhone = false;
+  state.awaitingCallTime = true;
+  saveMemory();
+
+  return res.json({
+    replies: ["Perfekt 👍 när kan du prata?"]
+  });
+}
+
+// -------- HANDLE CALL TIME --------
+
+if (state.awaitingCallTime) {
+
+  state.callTime = raw;
+  state.awaitingCallTime = false;
+  saveMemory();
+
+  await sendCallRequest(state);
+
+  return res.json({
+    replies: [`Toppen 👍 vi ringer dig ${state.callTime}`]
+  });
+}
 
     // -------- ADDRESS --------
 
