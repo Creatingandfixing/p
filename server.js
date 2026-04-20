@@ -49,7 +49,7 @@ function isValidAddress(addr) {
   return typeof addr === "string" && addr.length > 4 && /\d/.test(addr);
 }
 
-// -------- SMART FOLLOW-UP (NEW 🔥) --------
+// -------- SMART FOLLOW-UP --------
 
 function smartFollowUp(problem = "") {
   const text = problem.toLowerCase();
@@ -111,13 +111,13 @@ function parseSwedishDateTime(text) {
   return date;
 }
 
-// -------- EMAIL --------
+// -------- EMAIL (UNCHANGED CORE) --------
 
 const transporter = nodemailer.createTransport({
   host: "send.one.com",
   port: 587,
   secure: false,
-  family: 4, 
+  family: 4,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
@@ -168,10 +168,17 @@ app.post("/chat", async (req, res) => {
       return res.json({ replies: ["Tja 👍 vad har hänt?"] });
     }
 
-    // CONTACT
+    // CONTACT REQUEST
     if (msg.match(/\b(ring|kontakta)\b/i)) {
       await sendCallRequest(state);
       return res.json({ replies: ["Perfekt 👍 vi ringer upp dig!"] });
+    }
+
+    // HESITATION HANDLING (NEW 🔥)
+    if (msg.match(/vet inte|kanske|sen/i)) {
+      return res.json({
+        replies: ["Ingen stress 👍 vi löser det när du vill — vad gäller det?"]
+      });
     }
 
     // -------- PROBLEM --------
@@ -184,10 +191,25 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // -------- AFTER FOLLOW-UP → MOVE ON --------
+    // -------- CONFIRM BEFORE BOOKING (NEW 🔥)
 
-    if (state.problem && !state.followUpDone) {
-      state.followUpDone = true;
+    if (state.problem && !state.readyToBook) {
+      state.readyToBook = true;
+
+      return res.json({
+        replies: ["Okej 👍 vi fixar det. Vill du boka en tid?"]
+      });
+    }
+
+    // WAIT FOR YES
+    if (state.readyToBook && !state.confirmedBooking) {
+      if (msg.match(/ja|gärna|ok|kör/i)) {
+        state.confirmedBooking = true;
+      } else {
+        return res.json({
+          replies: ["Säg till när du vill boka 👍"]
+        });
+      }
     }
 
     // -------- NAME --------
@@ -247,7 +269,7 @@ app.post("/chat", async (req, res) => {
       state.time = parsed.toISOString();
     }
 
-    // -------- BOOKING --------
+    // -------- BOOKING (UNCHANGED CORE) --------
 
     await sendBookingEmail(state);
 
@@ -271,10 +293,10 @@ app.get("/", (req, res) => {
   res.send(`${BUSINESS_NAME} API running`);
 });
 
+// -------- EMAIL TEST --------
+
 app.get("/test-email", async (req, res) => {
   try {
-    console.log("TEST EMAIL TRIGGERED");
-
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: process.env.EMAIL_USER,
@@ -284,8 +306,9 @@ app.get("/test-email", async (req, res) => {
 
     res.send("Email sent!");
   } catch (err) {
-    console.error("EMAIL ERROR FULL:", err); // 👈 THIS LINE
+    console.error(err);
     res.send("Email failed: " + err.message);
   }
 });
+
 app.listen(process.env.PORT || 3000);
