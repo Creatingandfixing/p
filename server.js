@@ -14,7 +14,7 @@ app.use(express.json({ limit: "1mb" }));
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "Johanneshovrör";
 const OWNER_EMAIL = process.env.BOOKING_EMAIL || process.env.EMAIL_USER;
 
-// -------- MEMORY LOAD --------
+// -------- MEMORY --------
 
 let users = {};
 
@@ -64,6 +64,7 @@ function detectIntent(msg) {
   if (msg.match(/\b(ja|gärna|ok|kör|absolut)\b/i)) return "yes";
   if (msg.match(/\b(nej|inte|sen|inte än)\b/i)) return "no";
   if (msg.match(/\b(ring|kontakta)\b/i)) return "contact";
+  if (msg.match(/\b(rensa|ta bort|clear)\b/i)) return "clear";
   if (msg.match(/\?/)) return "question";
   if (msg.match(/vet inte|kanske/i)) return "hesitation";
   return "normal";
@@ -137,11 +138,45 @@ async function sendBookingEmail(data) {
     to: OWNER_EMAIL,
     subject: `🚨 Ny bokning - ${BUSINESS_NAME}`,
     text: `
+NY BOKNING
+
 Problem: ${data.problem}
 Namn: ${data.name}
 Telefon: ${data.phone}
 Adress: ${data.address}
 Tid: ${new Date(data.time).toLocaleString("sv-SE")}
+    `
+  });
+}
+
+async function sendUpdateEmail(data) {
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to: OWNER_EMAIL,
+    subject: `🔄 Ändrad bokning - ${BUSINESS_NAME}`,
+    text: `
+UPPDATERAD BOKNING
+
+Problem: ${data.problem}
+Namn: ${data.name}
+Telefon: ${data.phone}
+Adress: ${data.address}
+Tid: ${data.time ? new Date(data.time).toLocaleString("sv-SE") : "ej satt"}
+    `
+  });
+}
+
+async function sendCancelEmail(data) {
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to: OWNER_EMAIL,
+    subject: `❌ Avbokning - ${BUSINESS_NAME}`,
+    text: `
+AVBOKNING
+
+Namn: ${data.name || "okänd"}
+Telefon: ${data.phone || "saknas"}
+Problem: ${data.problem || "okänt"}
     `
   });
 }
@@ -178,31 +213,84 @@ app.post("/chat", async (req, res) => {
 
     let state = users[userId];
 
-    // -------- SAVE HISTORY --------
     state.history.push(raw);
     if (state.history.length > 6) state.history.shift();
     state.lastSeen = Date.now();
     saveMemory();
 
-    // GREETING
+    // -------- MODIFY BOOKING --------
+
+    if (state.booked) {
+
+      if (msg.match(/avboka/i)) {
+        await sendCancelEmail(state);
+
+        delete users[userId];
+        saveMemory();
+
+        return res.json({
+          replies: ["Okej 👍 bokningen är avbokad"]
+        });
+      }
+
+      if (msg.match(/ändra tid|ny tid/i)) {
+        state.time = null;
+        state.updating = true;
+        saveMemory();
+
+        return res.json({
+          replies: ["Absolut 👍 vilken ny tid passar?"]
+        });
+      }
+
+      if (msg.match(/ändra adress/i)) {
+        state.address = null;
+        state.updating = true;
+        saveMemory();
+
+        return res.json({
+          replies: ["Okej 👍 vilken adress gäller istället?"]
+        });
+      }
+
+      if (msg.match(/ändra nummer/i)) {
+        state.phone = null;
+        state.updating = true;
+        saveMemory();
+
+        return res.json({
+          replies: ["Inga problem 👍 vad är ditt nummer?"]
+        });
+      }
+
+      return res.json({
+        replies: ["Du är bokad 👍 vill du ändra något eller avboka?"]
+      });
+    }
+
+    // -------- GREETING --------
+
     if (msg === "hej" || msg === "tja") {
       return res.json({ replies: ["Tja 👍 vad har hänt?"] });
     }
 
-    // CONTACT
+    // -------- CONTACT --------
+
     if (intent === "contact") {
       await sendCallRequest(state);
       return res.json({ replies: ["Perfekt 👍 vi ringer upp dig!"] });
     }
 
-    // HESITATION
+    // -------- HESITATION --------
+
     if (intent === "hesitation") {
       return res.json({
         replies: ["Ingen stress 👍 vi tar det när det passar dig"]
       });
     }
 
-    // QUESTIONS
+    // -------- QUESTIONS --------
+
     if (intent === "question") {
 
       if (msg.includes("sparas")) {
@@ -218,11 +306,12 @@ app.post("/chat", async (req, res) => {
       }
 
       return res.json({
-        replies: ["Bra fråga 👍 vill du att vi kollar på det?"]
+        replies: ["Bra fråga 👍 vad gäller det?"]
       });
     }
 
-    // PROBLEM
+    // -------- PROBLEM --------
+
     if (!state.problem && msg.length > 3) {
       state.problem = raw;
       saveMemory();
@@ -231,7 +320,8 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // TRANSITION
+    // -------- TRANSITION --------
+
     if (state.problem && !state.readyToBook) {
       state.readyToBook = true;
       saveMemory();
@@ -240,7 +330,8 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // BOOK CONFIRM
+    // -------- BOOK CONFIRM --------
+
     if (state.readyToBook && !state.confirmedBooking) {
 
       if (intent === "yes") {
@@ -263,7 +354,8 @@ app.post("/chat", async (req, res) => {
       }
     }
 
-    // NAME
+    // -------- NAME --------
+
     if (!state.name) {
       state.name = capitalize(raw);
       saveMemory();
@@ -272,7 +364,8 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // PHONE
+    // -------- PHONE --------
+
     if (!state.phone) {
       const phone = normalizePhone(raw);
 
@@ -288,7 +381,8 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // ADDRESS
+    // -------- ADDRESS --------
+
     if (!state.address) {
       if (!isValidAddress(raw)) {
         return res.json({
@@ -304,7 +398,8 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // TIME
+    // -------- TIME --------
+
     if (!state.time) {
       const parsed = parseSwedishDateTime(raw);
 
@@ -318,15 +413,16 @@ app.post("/chat", async (req, res) => {
       saveMemory();
     }
 
-    // BOOKING
+    // -------- BOOKING --------
+
     await sendBookingEmail(state);
 
-    delete users[userId];
+    state.booked = true;
     saveMemory();
 
     return res.json({
       replies: [
-        `Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")}`
+        `Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")} — vill du ändra något är det bara att skriva 👍`
       ]
     });
 
@@ -335,8 +431,6 @@ app.post("/chat", async (req, res) => {
     res.json({ replies: ["⚠️ Något gick fel"] });
   }
 });
-
-// -------- HEALTH --------
 
 app.get("/", (req, res) => {
   res.send(`${BUSINESS_NAME} API running`);
