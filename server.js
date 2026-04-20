@@ -76,14 +76,14 @@ function smartFollowUp(problem = "") {
   const text = problem.toLowerCase();
 
   if (text.includes("läcker")) {
-    return "Okej 👍 droppar det lite eller rinner det hela tiden?";
+    return "Okej 👍 låter som läckage — rinner det hela tiden eller bara lite?";
   }
 
   if (text.includes("stopp")) {
     return "Okej 👍 är det helt stopp eller rinner det undan lite?";
   }
 
-  return "Okej 👍 kan du beskriva lite mer vad som händer?";
+  return "Okej 👍 vad är det som strular mer exakt?";
 }
 
 // -------- DATE --------
@@ -119,7 +119,7 @@ function parseSwedishDateTime(text) {
   return date;
 }
 
-// -------- EMAIL --------
+// -------- EMAIL (UNCHANGED CORE) --------
 
 const transporter = nodemailer.createTransport({
   host: "send.one.com",
@@ -218,90 +218,73 @@ app.post("/chat", async (req, res) => {
     state.lastSeen = Date.now();
     saveMemory();
 
-    // -------- MODIFY BOOKING --------
+    // -------- AFTER BOOKING --------
 
     if (state.booked) {
 
       if (msg.match(/avboka/i)) {
         await sendCancelEmail(state);
-
         delete users[userId];
         saveMemory();
-
-        return res.json({
-          replies: ["Okej 👍 bokningen är avbokad"]
-        });
+        return res.json({ replies: ["Okej 👍 då tar vi bort bokningen"] });
       }
 
-      if (msg.match(/ändra tid|ny tid/i)) {
+      if (msg.match(/ändra/i)) {
+        state.updating = true;
         state.time = null;
-        state.updating = true;
         saveMemory();
-
-        return res.json({
-          replies: ["Absolut 👍 vilken ny tid passar?"]
-        });
-      }
-
-      if (msg.match(/ändra adress/i)) {
-        state.address = null;
-        state.updating = true;
-        saveMemory();
-
-        return res.json({
-          replies: ["Okej 👍 vilken adress gäller istället?"]
-        });
-      }
-
-      if (msg.match(/ändra nummer/i)) {
-        state.phone = null;
-        state.updating = true;
-        saveMemory();
-
-        return res.json({
-          replies: ["Inga problem 👍 vad är ditt nummer?"]
-        });
+        return res.json({ replies: ["Självklart 👍 vilken ny tid passar bättre?"] });
       }
 
       return res.json({
-        replies: ["Du är bokad 👍 vill du ändra något eller avboka?"]
+        replies: ["Du är redan bokad 👍 vill du ändra något eller avboka?"]
       });
     }
 
     // -------- GREETING --------
 
     if (msg === "hej" || msg === "tja") {
-      return res.json({ replies: ["Tja 👍 vad har hänt?"] });
+      return res.json({
+        replies: ["Tja 👍 vad har hänt?"]
+      });
     }
 
     // -------- CONTACT --------
 
     if (intent === "contact") {
       await sendCallRequest(state);
-      return res.json({ replies: ["Perfekt 👍 vi ringer upp dig!"] });
+      return res.json({
+        replies: ["Inga problem 👍 vi ringer upp dig så kollar vi på det"]
+      });
     }
 
     // -------- HESITATION --------
 
     if (intent === "hesitation") {
       return res.json({
-        replies: ["Ingen stress 👍 vi tar det när det passar dig"]
+        replies: ["Ingen stress 👍 vi kan ta det när det passar dig — vad är det som strular?"]
       });
     }
 
-    // -------- QUESTIONS --------
+    // -------- QUESTIONS (MORE HUMAN) --------
 
     if (intent === "question") {
 
       if (msg.includes("sparas")) {
         return res.json({
-          replies: ["Ja 👍 chatten sparas så du kan fortsätta senare"]
+          replies: ["Ja 👍 den sparas här så du kan fortsätta senare om du vill"]
         });
       }
 
       if (msg.includes("pris")) {
         return res.json({
-          replies: ["Beror lite 👍 men vi kan säga mer när vi sett problemet"]
+          replies: ["Svårt att säga exakt 👍 men vi kan ge bättre svar när vi sett vad det gäller"]
+        });
+      }
+
+      if (state.problem) {
+        return res.json({
+          replies: [`Vi löser det 👍 vill du boka eller ska vi ringa dig?`]
         });
       }
 
@@ -315,6 +298,7 @@ app.post("/chat", async (req, res) => {
     if (!state.problem && msg.length > 3) {
       state.problem = raw;
       saveMemory();
+
       return res.json({
         replies: [smartFollowUp(state.problem)]
       });
@@ -325,8 +309,11 @@ app.post("/chat", async (req, res) => {
     if (state.problem && !state.readyToBook) {
       state.readyToBook = true;
       saveMemory();
+
       return res.json({
-        replies: ["Okej 👍 det fixar vi. Vill du boka nu eller senare?"]
+        replies: [
+          "Det där fixar vi 👍 vill du boka en tid eller vill du att vi ringer upp dig?"
+        ]
       });
     }
 
@@ -342,14 +329,15 @@ app.post("/chat", async (req, res) => {
       else if (intent === "no") {
         state.readyToBook = false;
         saveMemory();
+
         return res.json({
-          replies: ["Lugnt 👍 skriv när det passar dig"]
+          replies: ["Lugnt 👍 hör av dig när det passar"]
         });
       }
 
       else {
         return res.json({
-          replies: ["Säg till när du vill boka 👍"]
+          replies: ["Säg till 👍"]
         });
       }
     }
@@ -359,6 +347,7 @@ app.post("/chat", async (req, res) => {
     if (!state.name) {
       state.name = capitalize(raw);
       saveMemory();
+
       return res.json({
         replies: ["Toppen 👍 vad har du för nummer?"]
       });
@@ -370,7 +359,9 @@ app.post("/chat", async (req, res) => {
       const phone = normalizePhone(raw);
 
       if (!isValidPhone(phone)) {
-        return res.json({ replies: ["Skriv ett giltigt nummer 👍"] });
+        return res.json({
+          replies: ["Skriv ett nummer så vi kan nå dig 👍"]
+        });
       }
 
       state.phone = phone;
@@ -386,7 +377,7 @@ app.post("/chat", async (req, res) => {
     if (!state.address) {
       if (!isValidAddress(raw)) {
         return res.json({
-          replies: ["Skriv en fullständig adress 👍"]
+          replies: ["Skriv adressen 👍"]
         });
       }
 
@@ -394,7 +385,7 @@ app.post("/chat", async (req, res) => {
       saveMemory();
 
       return res.json({
-        replies: ["När passar det? 👍"]
+        replies: ["När passar det bäst för dig? 👍"]
       });
     }
 
@@ -415,7 +406,12 @@ app.post("/chat", async (req, res) => {
 
     // -------- BOOKING --------
 
-    await sendBookingEmail(state);
+    if (state.updating) {
+      await sendUpdateEmail(state);
+      state.updating = false;
+    } else {
+      await sendBookingEmail(state);
+    }
 
     state.booked = true;
     saveMemory();
