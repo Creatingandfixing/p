@@ -70,6 +70,16 @@ function detectIntent(msg) {
   return "normal";
 }
 
+// -------- PRIORITY --------
+
+function shouldOfferCall(state, msg) {
+  if (!state.problem) return false;
+  if (state.problem.length < 10) return true;
+  if (msg.match(/vet inte|kanske/i)) return true;
+  if (msg.includes("?")) return true;
+  return false;
+}
+
 // -------- FOLLOW-UP --------
 
 function smartFollowUp(problem = "") {
@@ -119,7 +129,7 @@ function parseSwedishDateTime(text) {
   return date;
 }
 
-// -------- EMAIL (UNCHANGED CORE) --------
+// -------- EMAIL --------
 
 const transporter = nodemailer.createTransport({
   host: "send.one.com",
@@ -138,45 +148,11 @@ async function sendBookingEmail(data) {
     to: OWNER_EMAIL,
     subject: `🚨 Ny bokning - ${BUSINESS_NAME}`,
     text: `
-NY BOKNING
-
 Problem: ${data.problem}
 Namn: ${data.name}
 Telefon: ${data.phone}
 Adress: ${data.address}
 Tid: ${new Date(data.time).toLocaleString("sv-SE")}
-    `
-  });
-}
-
-async function sendUpdateEmail(data) {
-  await transporter.sendMail({
-    from: process.env.EMAIL_USER,
-    to: OWNER_EMAIL,
-    subject: `🔄 Ändrad bokning - ${BUSINESS_NAME}`,
-    text: `
-UPPDATERAD BOKNING
-
-Problem: ${data.problem}
-Namn: ${data.name}
-Telefon: ${data.phone}
-Adress: ${data.address}
-Tid: ${data.time ? new Date(data.time).toLocaleString("sv-SE") : "ej satt"}
-    `
-  });
-}
-
-async function sendCancelEmail(data) {
-  await transporter.sendMail({
-    from: process.env.EMAIL_USER,
-    to: OWNER_EMAIL,
-    subject: `❌ Avbokning - ${BUSINESS_NAME}`,
-    text: `
-AVBOKNING
-
-Namn: ${data.name || "okänd"}
-Telefon: ${data.phone || "saknas"}
-Problem: ${data.problem || "okänt"}
     `
   });
 }
@@ -189,6 +165,7 @@ async function sendCallRequest(data) {
     text: `
 Namn: ${data.name || "okänd"}
 Telefon: ${data.phone || "saknas"}
+Tid: ${data.callTime || "ej angiven"}
 Problem: ${data.problem || "okänt"}
     `
   });
@@ -205,98 +182,59 @@ app.post("/chat", async (req, res) => {
     const userId = req.body.userId || "default-user";
 
     if (!users[userId]) {
-      users[userId] = {
-        history: [],
-        lastSeen: Date.now()
-      };
+      users[userId] = { history: [] };
     }
 
     let state = users[userId];
 
-    state.history.push(raw);
-    if (state.history.length > 6) state.history.shift();
-    state.lastSeen = Date.now();
-    saveMemory();
+    // -------- CALL FLOW FIRST (FIX 🔥) --------
 
-    // -------- AFTER BOOKING --------
+    if (state.awaitingCallPhone) {
+      const phone = normalizePhone(raw);
 
-    if (state.booked) {
-
-      if (msg.match(/avboka/i)) {
-        await sendCancelEmail(state);
-        delete users[userId];
-        saveMemory();
-        return res.json({ replies: ["Okej 👍 då tar vi bort bokningen"] });
+      if (!isValidPhone(phone)) {
+        return res.json({ replies: ["Skriv ett nummer så vi kan ringa 👍"] });
       }
 
-      if (msg.match(/ändra/i)) {
-        state.updating = true;
-        state.time = null;
-        saveMemory();
-        return res.json({ replies: ["Självklart 👍 vilken ny tid passar bättre?"] });
-      }
+      state.phone = phone;
+      state.awaitingCallPhone = false;
+      state.awaitingCallTime = true;
+      saveMemory();
+
+      return res.json({ replies: ["Perfekt 👍 när kan du prata?"] });
+    }
+
+    if (state.awaitingCallTime) {
+      state.callTime = raw;
+      state.awaitingCallTime = false;
+      saveMemory();
+
+      await sendCallRequest(state);
 
       return res.json({
-        replies: ["Du är redan bokad 👍 vill du ändra något eller avboka?"]
+        replies: [`Toppen 👍 vi ringer dig ${state.callTime}`]
       });
     }
 
     // -------- GREETING --------
 
     if (msg === "hej" || msg === "tja") {
-      return res.json({
-        replies: ["Tja 👍 vad har hänt?"]
-      });
+      return res.json({ replies: ["Tja 👍 vad har hänt?"] });
     }
 
-    // -------- CONTACT (FIXED 🔥)
+    // -------- CONTACT --------
 
-if (intent === "contact") {
+    if (intent === "contact") {
 
-  // if we already have phone → ask when
-  if (state.phone) {
-    state.awaitingCallTime = true;
-    saveMemory();
-
-    return res.json({
-      replies: ["Absolut 👍 när kan du prata?"]
-    });
-  }
-
-  // if no phone → ask for it first
-  state.awaitingCallPhone = true;
-  saveMemory();
-
-  return res.json({
-    replies: ["Självklart 👍 vilket nummer når vi dig på?"]
-  });
-}
-
-    // -------- QUESTIONS (MORE HUMAN) --------
-
-    if (intent === "question") {
-
-      if (msg.includes("sparas")) {
-        return res.json({
-          replies: ["Ja 👍 den sparas här så du kan fortsätta senare om du vill"]
-        });
+      if (state.phone) {
+        state.awaitingCallTime = true;
+        saveMemory();
+        return res.json({ replies: ["Absolut 👍 när kan du prata?"] });
       }
 
-      if (msg.includes("pris")) {
-        return res.json({
-          replies: ["Svårt att säga exakt 👍 men vi kan ge bättre svar när vi sett vad det gäller"]
-        });
-      }
-
-      if (state.problem) {
-        return res.json({
-          replies: [`Vi löser det 👍 vill du boka eller ska vi ringa dig?`]
-        });
-      }
-
-      return res.json({
-        replies: ["Bra fråga 👍 vad gäller det?"]
-      });
+      state.awaitingCallPhone = true;
+      saveMemory();
+      return res.json({ replies: ["Vilket nummer når vi dig på? 👍"] });
     }
 
     // -------- PROBLEM --------
@@ -304,48 +242,25 @@ if (intent === "contact") {
     if (!state.problem && msg.length > 3) {
       state.problem = raw;
       saveMemory();
-
-      return res.json({
-        replies: [smartFollowUp(state.problem)]
-      });
+      return res.json({ replies: [smartFollowUp(state.problem)] });
     }
 
-    // -------- TRANSITION --------
+    // -------- TRANSITION (SMART 🔥) --------
 
     if (state.problem && !state.readyToBook) {
+
       state.readyToBook = true;
       saveMemory();
 
+      if (shouldOfferCall(state, msg)) {
+        return res.json({
+          replies: ["Det där fixar vi 👍 vill du att vi ringer dig?"]
+        });
+      }
+
       return res.json({
-        replies: [
-          "Det där fixar vi 👍 vill du boka en tid eller vill du att vi ringer upp dig?"
-        ]
+        replies: ["Det där fixar vi 👍 vill du boka en tid direkt?"]
       });
-    }
-
-    // -------- BOOK CONFIRM --------
-
-    if (state.readyToBook && !state.confirmedBooking) {
-
-      if (intent === "yes") {
-        state.confirmedBooking = true;
-        saveMemory();
-      }
-
-      else if (intent === "no") {
-        state.readyToBook = false;
-        saveMemory();
-
-        return res.json({
-          replies: ["Lugnt 👍 hör av dig när det passar"]
-        });
-      }
-
-      else {
-        return res.json({
-          replies: ["Säg till 👍"]
-        });
-      }
     }
 
     // -------- NAME --------
@@ -353,10 +268,7 @@ if (intent === "contact") {
     if (!state.name) {
       state.name = capitalize(raw);
       saveMemory();
-
-      return res.json({
-        replies: ["Toppen 👍 vad har du för nummer?"]
-      });
+      return res.json({ replies: ["Toppen 👍 vad har du för nummer?"] });
     }
 
     // -------- PHONE --------
@@ -365,71 +277,26 @@ if (intent === "contact") {
       const phone = normalizePhone(raw);
 
       if (!isValidPhone(phone)) {
-        return res.json({
-          replies: ["Skriv ett nummer så vi kan nå dig 👍"]
-        });
+        return res.json({ replies: ["Skriv ett giltigt nummer 👍"] });
       }
 
       state.phone = phone;
       saveMemory();
 
-      return res.json({
-        replies: ["Vilken adress gäller det?"]
-      });
+      return res.json({ replies: ["Vilken adress gäller det?"] });
     }
-
-    // -------- HANDLE CALL PHONE --------
-
-if (state.awaitingCallPhone) {
-
-  const phone = normalizePhone(raw);
-
-  if (!isValidPhone(phone)) {
-    return res.json({
-      replies: ["Skriv ett nummer så vi kan ringa 👍"]
-    });
-  }
-
-  state.phone = phone;
-  state.awaitingCallPhone = false;
-  state.awaitingCallTime = true;
-  saveMemory();
-
-  return res.json({
-    replies: ["Perfekt 👍 när kan du prata?"]
-  });
-}
-
-// -------- HANDLE CALL TIME --------
-
-if (state.awaitingCallTime) {
-
-  state.callTime = raw;
-  state.awaitingCallTime = false;
-  saveMemory();
-
-  await sendCallRequest(state);
-
-  return res.json({
-    replies: [`Toppen 👍 vi ringer dig ${state.callTime}`]
-  });
-}
 
     // -------- ADDRESS --------
 
     if (!state.address) {
       if (!isValidAddress(raw)) {
-        return res.json({
-          replies: ["Skriv adressen 👍"]
-        });
+        return res.json({ replies: ["Skriv adressen 👍"] });
       }
 
       state.address = capitalize(raw);
       saveMemory();
 
-      return res.json({
-        replies: ["När passar det bäst för dig? 👍"]
-      });
+      return res.json({ replies: ["När passar det? 👍"] });
     }
 
     // -------- TIME --------
@@ -438,9 +305,7 @@ if (state.awaitingCallTime) {
       const parsed = parseSwedishDateTime(raw);
 
       if (!parsed) {
-        return res.json({
-          replies: ["Vilken tid ungefär? 👍"]
-        });
+        return res.json({ replies: ["Vilken tid ungefär? 👍"] });
       }
 
       state.time = parsed.toISOString();
@@ -449,19 +314,11 @@ if (state.awaitingCallTime) {
 
     // -------- BOOKING --------
 
-    if (state.updating) {
-      await sendUpdateEmail(state);
-      state.updating = false;
-    } else {
-      await sendBookingEmail(state);
-    }
-
-    state.booked = true;
-    saveMemory();
+    await sendBookingEmail(state);
 
     return res.json({
       replies: [
-        `Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")} — vill du ändra något är det bara att skriva 👍`
+        `Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")}`
       ]
     });
 
@@ -469,10 +326,6 @@ if (state.awaitingCallTime) {
     console.error(err);
     res.json({ replies: ["⚠️ Något gick fel"] });
   }
-});
-
-app.get("/", (req, res) => {
-  res.send(`${BUSINESS_NAME} API running`);
 });
 
 app.listen(process.env.PORT || 3000);
