@@ -64,20 +64,15 @@ function detectIntent(msg) {
   if (msg.match(/\b(ja|gärna|ok|kör|absolut)\b/i)) return "yes";
   if (msg.match(/\b(nej|inte|sen|inte än)\b/i)) return "no";
   if (msg.match(/\b(ring|kontakta)\b/i)) return "contact";
-  if (msg.match(/\b(rensa|ta bort|clear)\b/i)) return "clear";
   if (msg.match(/\?/)) return "question";
   if (msg.match(/vet inte|kanske/i)) return "hesitation";
   return "normal";
 }
 
-// -------- PRIORITY --------
+// -------- HUMAN SIGNALS --------
 
-function shouldOfferCall(state, msg) {
-  if (!state.problem) return false;
-  if (state.problem.length < 10) return true;
-  if (msg.match(/vet inte|kanske/i)) return true;
-  if (msg.includes("?")) return true;
-  return false;
+function isFrustrated(msg) {
+  return msg.match(/!!!|fan|sjukt|snälla|hjälp/i);
 }
 
 // -------- FOLLOW-UP --------
@@ -182,12 +177,12 @@ app.post("/chat", async (req, res) => {
     const userId = req.body.userId || "default-user";
 
     if (!users[userId]) {
-      users[userId] = { history: [] };
+      users[userId] = {};
     }
 
     let state = users[userId];
 
-    // -------- CALL FLOW FIRST (FIX 🔥) --------
+    // -------- CALL FLOW FIRST --------
 
     if (state.awaitingCallPhone) {
       const phone = normalizePhone(raw);
@@ -222,9 +217,17 @@ app.post("/chat", async (req, res) => {
       return res.json({ replies: ["Tja 👍 vad har hänt?"] });
     }
 
-    // -------- CONTACT --------
+    // -------- CONTACT (SMART FIX) --------
 
     if (intent === "contact") {
+
+      if (msg.match(/ringa er|kan jag ringa/i)) {
+        return res.json({
+          replies: [
+            "Självklart 👍 du kan ringa oss via hemsidan — vill du att vi ringer dig istället?"
+          ]
+        });
+      }
 
       if (state.phone) {
         state.awaitingCallTime = true;
@@ -237,29 +240,60 @@ app.post("/chat", async (req, res) => {
       return res.json({ replies: ["Vilket nummer når vi dig på? 👍"] });
     }
 
+    // -------- HUMAN UPGRADE --------
+
+    if (isFrustrated(msg)) {
+      return res.json({
+        replies: ["Jag fattar 👍 vill du att vi ringer dig direkt så löser vi det?"]
+      });
+    }
+
+    if (intent === "hesitation") {
+      return res.json({
+        replies: ["Ingen stress 👍 vill du att vi ringer dig istället?"]
+      });
+    }
+
+    // -------- QUESTIONS --------
+
+    if (intent === "question") {
+
+      if (msg.includes("pris")) {
+        return res.json({
+          replies: ["Svårt att säga exakt 👍 men vi kan kolla på det snabbt om du vill"]
+        });
+      }
+
+      if (state.problem) {
+        return res.json({
+          replies: ["Vi löser det 👍 vill du boka eller ska vi ringa dig?"]
+        });
+      }
+
+      return res.json({
+        replies: ["Bra fråga 👍 vad gäller det?"]
+      });
+    }
+
     // -------- PROBLEM --------
 
     if (!state.problem && msg.length > 3) {
       state.problem = raw;
       saveMemory();
-      return res.json({ replies: [smartFollowUp(state.problem)] });
+
+      return res.json({
+        replies: [smartFollowUp(state.problem)]
+      });
     }
 
-    // -------- TRANSITION (SMART 🔥) --------
+    // -------- TRANSITION --------
 
     if (state.problem && !state.readyToBook) {
-
       state.readyToBook = true;
       saveMemory();
 
-      if (shouldOfferCall(state, msg)) {
-        return res.json({
-          replies: ["Det där fixar vi 👍 vill du att vi ringer dig?"]
-        });
-      }
-
       return res.json({
-        replies: ["Det där fixar vi 👍 vill du boka en tid direkt?"]
+        replies: ["Det där fixar vi 👍 vill du boka eller ska vi ringa dig?"]
       });
     }
 
@@ -277,7 +311,9 @@ app.post("/chat", async (req, res) => {
       const phone = normalizePhone(raw);
 
       if (!isValidPhone(phone)) {
-        return res.json({ replies: ["Skriv ett giltigt nummer 👍"] });
+        return res.json({
+          replies: ["Skriv ett nummer så vi kan nå dig 👍"]
+        });
       }
 
       state.phone = phone;
