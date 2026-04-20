@@ -69,12 +69,6 @@ function detectIntent(msg) {
   return "normal";
 }
 
-// -------- HUMAN SIGNALS --------
-
-function isFrustrated(msg) {
-  return msg.match(/!!!|fan|sjukt|snälla|hjälp/i);
-}
-
 // -------- FOLLOW-UP --------
 
 function smartFollowUp(problem = "") {
@@ -182,7 +176,7 @@ app.post("/chat", async (req, res) => {
 
     let state = users[userId];
 
-    // -------- CALL FLOW FIRST --------
+    // -------- ACTIVE CALL FLOW --------
 
     if (state.awaitingCallPhone) {
       const phone = normalizePhone(raw);
@@ -211,15 +205,28 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // -------- GREETING --------
-
-    if (msg === "hej" || msg === "tja") {
-      return res.json({ replies: ["Tja 👍 vad har hänt?"] });
-    }
-
-    // -------- CONTACT (SMART FIX) --------
+    // -------- CONTACT (HIGHEST PRIORITY 🔥)
 
     if (intent === "contact") {
+
+      if (msg.match(/ring mig|ringa mig|kan ni ringa/i)) {
+
+        if (state.phone) {
+          state.awaitingCallTime = true;
+          saveMemory();
+
+          return res.json({
+            replies: ["Absolut 👍 när kan du prata?"]
+          });
+        }
+
+        state.awaitingCallPhone = true;
+        saveMemory();
+
+        return res.json({
+          replies: ["Självklart 👍 vilket nummer når vi dig på?"]
+        });
+      }
 
       if (msg.match(/ringa er|kan jag ringa/i)) {
         return res.json({
@@ -229,29 +236,15 @@ app.post("/chat", async (req, res) => {
         });
       }
 
-      if (state.phone) {
-        state.awaitingCallTime = true;
-        saveMemory();
-        return res.json({ replies: ["Absolut 👍 när kan du prata?"] });
-      }
-
-      state.awaitingCallPhone = true;
-      saveMemory();
-      return res.json({ replies: ["Vilket nummer når vi dig på? 👍"] });
-    }
-
-    // -------- HUMAN UPGRADE --------
-
-    if (isFrustrated(msg)) {
       return res.json({
-        replies: ["Jag fattar 👍 vill du att vi ringer dig direkt så löser vi det?"]
+        replies: ["Vill du att vi ringer dig eller vill du ringa oss? 👍"]
       });
     }
 
-    if (intent === "hesitation") {
-      return res.json({
-        replies: ["Ingen stress 👍 vill du att vi ringer dig istället?"]
-      });
+    // -------- GREETING --------
+
+    if (msg === "hej" || msg === "tja") {
+      return res.json({ replies: ["Tja 👍 vad har hänt?"] });
     }
 
     // -------- QUESTIONS --------
