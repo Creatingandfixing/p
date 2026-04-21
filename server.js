@@ -374,16 +374,22 @@ app.post("/chat", async (req, res) => {
 
     // -------- TRANSITION --------
 
-    if (state.problem && !state.readyToBook) {
-      state.readyToBook = true;
-      saveMemory();
+    if (
+  state.problem &&
+  !state.readyToBook &&
+  !state.awaitingCallPhone &&
+  !state.awaitingCallTime &&
+  intent !== "contact"
+) {
+  state.readyToBook = true;
+  saveMemory();
 
-      return res.json({
-        replies: [
-          "Det där fixar vi 👍 vill du boka eller ska vi ringa dig?"
-        ]
-      });
-    }
+  return res.json({
+    replies: [
+      "Det där fixar vi 👍 vill du boka eller ska vi ringa dig?"
+    ]
+  });
+}
 
     // -------- NAME --------
 
