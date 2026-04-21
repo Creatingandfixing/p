@@ -10,7 +10,6 @@ const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
-
 app.use(express.static("public"));
 
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "Johanneshovrör";
@@ -28,7 +27,11 @@ try {
 }
 
 function saveMemory() {
-  fs.writeFileSync("memory.json", JSON.stringify(users, null, 2));
+  try {
+    fs.writeFileSync("memory.json", JSON.stringify(users, null, 2));
+  } catch (e) {
+    console.error("Memory save failed:", e.message);
+  }
 }
 
 // -------- HELPERS --------
@@ -58,6 +61,10 @@ function isValidPhone(phone) {
 
 function isValidAddress(addr) {
   return typeof addr === "string" && addr.length > 4 && /\d/.test(addr);
+}
+
+function human(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
 }
 
 // -------- INTENT --------
@@ -98,8 +105,8 @@ function parseSwedishDateTime(text) {
   }
 
   const days = {
-    söndag: 0, måndag: 1, tisdag: 2, onsdag: 3,
-    torsdag: 4, fredag: 5, lördag: 6
+    söndag: 0, måndag: 1, tisdag: 2,
+    onsdag: 3, torsdag: 4, fredag: 5, lördag: 6
   };
 
   for (let day in days) {
@@ -148,6 +155,38 @@ Tid: ${new Date(data.time).toLocaleString("sv-SE")}
   });
 }
 
+async function sendUpdateEmail(data) {
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to: OWNER_EMAIL,
+    subject: `🔄 Ändrad bokning - ${BUSINESS_NAME}`,
+    text: `
+UPPDATERAD BOKNING
+
+Problem: ${data.problem}
+Namn: ${data.name}
+Telefon: ${data.phone}
+Adress: ${data.address}
+Ny tid: ${new Date(data.time).toLocaleString("sv-SE")}
+    `
+  });
+}
+
+async function sendCancelEmail(data) {
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to: OWNER_EMAIL,
+    subject: `❌ Avbokning - ${BUSINESS_NAME}`,
+    text: `
+AVBOKNING
+
+Namn: ${data.name || "okänd"}
+Telefon: ${data.phone || "saknas"}
+Problem: ${data.problem || "okänt"}
+    `
+  });
+}
+
 async function sendCallRequest(data) {
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
@@ -172,19 +211,41 @@ app.post("/chat", async (req, res) => {
 
     const userId = req.body.userId || "default-user";
 
-    if (!users[userId]) {
-      users[userId] = {};
-    }
-
+    if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // -------- ACTIVE CALL FLOW --------
+    // -------- AFTER BOOKING --------
+
+    if (state.booked) {
+
+      if (msg.match(/avboka/i)) {
+        await sendCancelEmail(state);
+        delete users[userId];
+        saveMemory();
+
+        return res.json({ replies: ["Okej 👍 jag tar bort bokningen direkt"] });
+      }
+
+      if (msg.match(/ändra|byta/i)) {
+        state.updating = true;
+        state.time = null;
+        saveMemory();
+
+        return res.json({ replies: ["Självklart 👍 vilken ny tid passar bättre?"] });
+      }
+
+      return res.json({
+        replies: ["Du är redan bokad 👍 vill du ändra något eller avboka?"]
+      });
+    }
+
+    // -------- CALL FLOW --------
 
     if (state.awaitingCallPhone) {
       const phone = normalizePhone(raw);
 
       if (!isValidPhone(phone)) {
-        return res.json({ replies: ["Skriv ett nummer så vi kan ringa 👍"] });
+        return res.json({ replies: ["Skicka ett nummer 👍"] });
       }
 
       state.phone = phone;
@@ -192,7 +253,7 @@ app.post("/chat", async (req, res) => {
       state.awaitingCallTime = true;
       saveMemory();
 
-      return res.json({ replies: ["Perfekt 👍 när kan du prata?"] });
+      return res.json({ replies: ["När kan du prata? 👍"] });
     }
 
     if (state.awaitingCallTime) {
@@ -207,66 +268,44 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // -------- CONTACT (HIGHEST PRIORITY 🔥)
+    // -------- CONTACT FIX --------
 
     if (intent === "contact") {
 
-      if (msg.match(/ring mig|ringa mig|kan ni ringa/i)) {
+      if (msg.match(/ringa mig|ring mig|kan ni ringa/i)) {
+
+        if (!state.problem) {
+          return res.json({ replies: ["Absolut 👍 vad gäller det?"] });
+        }
 
         if (state.phone) {
           state.awaitingCallTime = true;
           saveMemory();
-
-          return res.json({
-            replies: ["Absolut 👍 när kan du prata?"]
-          });
+          return res.json({ replies: ["När passar det att vi ringer? 👍"] });
         }
 
         state.awaitingCallPhone = true;
         saveMemory();
 
-        return res.json({
-          replies: ["Självklart 👍 vilket nummer når vi dig på?"]
-        });
+        return res.json({ replies: ["Vilket nummer når vi dig på? 👍"] });
       }
 
       if (msg.match(/ringa er|kan jag ringa/i)) {
         return res.json({
-          replies: [
-            "Självklart 👍 du kan ringa oss via hemsidan — vill du att vi ringer dig istället?"
-          ]
+          replies: ["Du kan ringa oss via hemsidan 👍 vill du att vi ringer dig istället?"]
         });
       }
-
-      return res.json({
-        replies: ["Vill du att vi ringer dig eller vill du ringa oss? 👍"]
-      });
     }
 
     // -------- GREETING --------
 
     if (msg === "hej" || msg === "tja") {
-      return res.json({ replies: ["Tja 👍 vad har hänt?"] });
-    }
-
-    // -------- QUESTIONS --------
-
-    if (intent === "question") {
-
-      if (msg.includes("pris")) {
-        return res.json({
-          replies: ["Svårt att säga exakt 👍 men vi kan kolla på det snabbt om du vill"]
-        });
-      }
-
-      if (state.problem) {
-        return res.json({
-          replies: ["Vi löser det 👍 vill du boka eller ska vi ringa dig?"]
-        });
-      }
-
       return res.json({
-        replies: ["Bra fråga 👍 vad gäller det?"]
+        replies: [human([
+          "Tja 👍 vad har hänt?",
+          "Hej 👍 vad kan jag hjälpa dig med?",
+          "Hallå 👍 vad gäller det?"
+        ])]
       });
     }
 
@@ -275,10 +314,7 @@ app.post("/chat", async (req, res) => {
     if (!state.problem && msg.length > 3) {
       state.problem = raw;
       saveMemory();
-
-      return res.json({
-        replies: [smartFollowUp(state.problem)]
-      });
+      return res.json({ replies: [smartFollowUp(state.problem)] });
     }
 
     // -------- TRANSITION --------
@@ -306,9 +342,7 @@ app.post("/chat", async (req, res) => {
       const phone = normalizePhone(raw);
 
       if (!isValidPhone(phone)) {
-        return res.json({
-          replies: ["Skriv ett nummer så vi kan nå dig 👍"]
-        });
+        return res.json({ replies: ["Skriv ett giltigt nummer 👍"] });
       }
 
       state.phone = phone;
@@ -345,12 +379,18 @@ app.post("/chat", async (req, res) => {
 
     // -------- BOOKING --------
 
-    await sendBookingEmail(state);
+    if (state.updating) {
+      await sendUpdateEmail(state);
+      state.updating = false;
+    } else {
+      await sendBookingEmail(state);
+    }
+
+    state.booked = true;
+    saveMemory();
 
     return res.json({
-      replies: [
-        `Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")}`
-      ]
+      replies: [`Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")}`]
     });
 
   } catch (err) {
@@ -359,4 +399,8 @@ app.post("/chat", async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3000);
+// -------- START --------
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Server running...");
+});
