@@ -214,6 +214,31 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
+    // -------- 🚨 URGENCY DETECTION (AKUT LÄCKA) --------
+
+    if (msg.match(/sprutar|forsar|läcker.*mycket|översvämning|akut/i)) {
+
+      if (state.phone) {
+        state.awaitingCallTime = true;
+        saveMemory();
+
+        return res.json({
+          replies: [
+            "Det låter akut 😬 vi ringer dig direkt — när kan du prata?"
+          ]
+        });
+      }
+
+      state.awaitingCallPhone = true;
+      saveMemory();
+
+      return res.json({
+        replies: [
+          "Det låter akut 😬 vi ringer dig direkt — vilket nummer når vi dig på?"
+        ]
+      });
+    }
+
     // -------- AFTER BOOKING --------
 
     if (state.booked) {
@@ -223,7 +248,9 @@ app.post("/chat", async (req, res) => {
         delete users[userId];
         saveMemory();
 
-        return res.json({ replies: ["Okej 👍 jag tar bort bokningen direkt"] });
+        return res.json({
+          replies: ["Okej 👍 jag tar bort bokningen direkt"]
+        });
       }
 
       if (msg.match(/ändra|byta/i)) {
@@ -231,7 +258,9 @@ app.post("/chat", async (req, res) => {
         state.time = null;
         saveMemory();
 
-        return res.json({ replies: ["Självklart 👍 vilken ny tid passar bättre?"] });
+        return res.json({
+          replies: ["Självklart 👍 vilken ny tid passar bättre?"]
+        });
       }
 
       return res.json({
@@ -245,7 +274,9 @@ app.post("/chat", async (req, res) => {
       const phone = normalizePhone(raw);
 
       if (!isValidPhone(phone)) {
-        return res.json({ replies: ["Skicka ett nummer 👍"] });
+        return res.json({
+          replies: ["Skicka ett nummer 👍"]
+        });
       }
 
       state.phone = phone;
@@ -253,7 +284,9 @@ app.post("/chat", async (req, res) => {
       state.awaitingCallTime = true;
       saveMemory();
 
-      return res.json({ replies: ["När kan du prata? 👍"] });
+      return res.json({
+        replies: ["När kan du prata? 👍"]
+      });
     }
 
     if (state.awaitingCallTime) {
@@ -268,31 +301,40 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // -------- CONTACT FIX --------
+    // -------- CONTACT --------
 
     if (intent === "contact") {
 
       if (msg.match(/ringa mig|ring mig|kan ni ringa/i)) {
 
         if (!state.problem) {
-          return res.json({ replies: ["Absolut 👍 vad gäller det?"] });
+          return res.json({
+            replies: ["Absolut 👍 vad gäller det?"]
+          });
         }
 
         if (state.phone) {
           state.awaitingCallTime = true;
           saveMemory();
-          return res.json({ replies: ["När passar det att vi ringer? 👍"] });
+
+          return res.json({
+            replies: ["När passar det att vi ringer? 👍"]
+          });
         }
 
         state.awaitingCallPhone = true;
         saveMemory();
 
-        return res.json({ replies: ["Vilket nummer når vi dig på? 👍"] });
+        return res.json({
+          replies: ["Vilket nummer når vi dig på? 👍"]
+        });
       }
 
       if (msg.match(/ringa er|kan jag ringa/i)) {
         return res.json({
-          replies: ["Du kan ringa oss via hemsidan 👍 vill du att vi ringer dig istället?"]
+          replies: [
+            "Du kan ringa oss via hemsidan 👍 vill du att vi ringer dig istället?"
+          ]
         });
       }
     }
@@ -301,20 +343,33 @@ app.post("/chat", async (req, res) => {
 
     if (msg === "hej" || msg === "tja") {
       return res.json({
-        replies: [human([
-          "Tja 👍 vad har hänt?",
-          "Hej 👍 vad kan jag hjälpa dig med?",
-          "Hallå 👍 vad gäller det?"
-        ])]
+        replies: ["Tja 👍 vad har hänt?"]
       });
     }
 
-    // -------- PROBLEM --------
+    // -------- PROBLEM (FIRST STEP) --------
 
     if (!state.problem && msg.length > 3) {
       state.problem = raw;
+      state.followUpDone = false;
       saveMemory();
-      return res.json({ replies: [smartFollowUp(state.problem)] });
+
+      return res.json({
+        replies: [smartFollowUp(state.problem)]
+      });
+    }
+
+    // -------- FOLLOW-UP FIX (NO LOOP) --------
+
+    if (state.problem && !state.followUpDone) {
+      state.followUpDone = true;
+      saveMemory();
+
+      return res.json({
+        replies: [
+          "Okej 👍 det där fixar vi. Vill du boka eller ska vi ringa dig?"
+        ]
+      });
     }
 
     // -------- TRANSITION --------
@@ -324,7 +379,9 @@ app.post("/chat", async (req, res) => {
       saveMemory();
 
       return res.json({
-        replies: ["Det där fixar vi 👍 vill du boka eller ska vi ringa dig?"]
+        replies: [
+          "Det där fixar vi 👍 vill du boka eller ska vi ringa dig?"
+        ]
       });
     }
 
@@ -333,7 +390,10 @@ app.post("/chat", async (req, res) => {
     if (!state.name) {
       state.name = capitalize(raw);
       saveMemory();
-      return res.json({ replies: ["Toppen 👍 vad har du för nummer?"] });
+
+      return res.json({
+        replies: ["Toppen 👍 vad har du för nummer?"]
+      });
     }
 
     // -------- PHONE --------
@@ -342,26 +402,34 @@ app.post("/chat", async (req, res) => {
       const phone = normalizePhone(raw);
 
       if (!isValidPhone(phone)) {
-        return res.json({ replies: ["Skriv ett giltigt nummer 👍"] });
+        return res.json({
+          replies: ["Skriv ett giltigt nummer 👍"]
+        });
       }
 
       state.phone = phone;
       saveMemory();
 
-      return res.json({ replies: ["Vilken adress gäller det?"] });
+      return res.json({
+        replies: ["Vilken adress gäller det?"]
+      });
     }
 
     // -------- ADDRESS --------
 
     if (!state.address) {
       if (!isValidAddress(raw)) {
-        return res.json({ replies: ["Skriv adressen 👍"] });
+        return res.json({
+          replies: ["Skriv adressen 👍"]
+        });
       }
 
       state.address = capitalize(raw);
       saveMemory();
 
-      return res.json({ replies: ["När passar det? 👍"] });
+      return res.json({
+        replies: ["När passar det? 👍"]
+      });
     }
 
     // -------- TIME --------
@@ -370,7 +438,9 @@ app.post("/chat", async (req, res) => {
       const parsed = parseSwedishDateTime(raw);
 
       if (!parsed) {
-        return res.json({ replies: ["Vilken tid ungefär? 👍"] });
+        return res.json({
+          replies: ["Vilken tid ungefär? 👍"]
+        });
       }
 
       state.time = parsed.toISOString();
@@ -390,7 +460,9 @@ app.post("/chat", async (req, res) => {
     saveMemory();
 
     return res.json({
-      replies: [`Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")}`]
+      replies: [
+        `Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")}`
+      ]
     });
 
   } catch (err) {
