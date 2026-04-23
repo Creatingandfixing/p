@@ -363,7 +363,7 @@ if (state.problem && raw.length > (state.details?.length || 0)) {
     raw.match(/rör|läck|stopp|vatten|dusch|problem/i) // plumbing words
   ) {
     return res.json({
-      replies: ["Vad heter du? 🙂"]
+      replies: ["Vad heter du? (gärna för- och efternamn) 🙂"]
     });
   }
 
