@@ -139,6 +139,20 @@ function isUrgent(text) {
   return text.match(/akut|sprutar|forsar|översvämning|panik/i);
 }
 
+function smartFollowUp(problem = "") {
+  const text = problem.toLowerCase();
+
+  if (text.includes("läcker")) {
+    return "Rinner det hela tiden eller bara ibland? 👍";
+  }
+
+  if (text.includes("stopp")) {
+    return "Är det helt stopp eller rinner det undan lite?";
+  }
+
+  return "Kan du beskriva lite mer?";
+}
+
 function parseSwedishDateTime(text) {
   const now = new Date();
   let date = new Date(now);
@@ -232,6 +246,32 @@ app.post("/chat", async (req, res) => {
       });
     }
 
+    // -------- CONTACT --------
+if (msg.match(/ring mig|ringa mig|kan ni ringa/i)) {
+
+  if (!state.problem) {
+    return res.json({
+      replies: ["Absolut 👍 vad gäller det först?"]
+    });
+  }
+
+  if (state.phone) {
+    state.awaitingCallTime = true;
+    saveMemory();
+
+    return res.json({
+      replies: ["När kan du prata? 👍"]
+    });
+  }
+
+  state.awaitingCallPhone = true;
+  saveMemory();
+
+  return res.json({
+    replies: ["Vilket nummer når vi dig på? 👍"]
+  });
+}
+
     // -------- CALL FLOW --------
     if (state.awaitingCallPhone) {
       const phone = normalizePhone(raw);
@@ -270,7 +310,7 @@ app.post("/chat", async (req, res) => {
           await aiEnhance(
             state,
             raw,
-            "Okej 👍 kan du beskriva lite mer?",
+            smartFollowUp(raw),
             "Ask a follow-up question about the problem"
           )
         ]
@@ -279,13 +319,26 @@ app.post("/chat", async (req, res) => {
 
     // -------- FLOW --------
     if (!state.name) {
-      state.name = capitalize(raw);
-      saveMemory();
 
-      return res.json({
-        replies: [await aiEnhance(state, raw, "Vad heter du?", "Ask for name")]
-      });
-    }
+  // reject non-name inputs
+  if (
+    raw.match(/\d/) ||                     // contains numbers
+    raw.length > 30 ||                     // too long
+    raw.split(" ").length > 3 ||           // too many words
+    raw.match(/rör|läck|stopp|vatten|dusch|problem/i) // plumbing words
+  ) {
+    return res.json({
+      replies: ["Vad heter du? 🙂"]
+    });
+  }
+
+  state.name = capitalize(raw);
+  saveMemory();
+
+  return res.json({
+    replies: [await aiEnhance(state, raw, "Vad har du för nummer?", "Ask for phone")]
+  });
+}
 
     if (!state.phone) {
       const phone = normalizePhone(raw);
