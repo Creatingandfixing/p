@@ -416,7 +416,11 @@ if (state.problem && raw.length > (state.details?.length || 0)) {
       saveMemory();
     }
 
-    // -------- BOOK --------
+    // -------- HANDLE CONFIRMATION --------
+if (state.awaitingConfirmation) {
+
+  if (msg.includes("ja")) {
+
     await sendBookingEmail(state);
 
     delete users[userId];
@@ -424,10 +428,51 @@ if (state.problem && raw.length > (state.details?.length || 0)) {
 
     return res.json({
       replies: [
-        `Perfekt 👍 bokat ${new Date(state.time).toLocaleString("sv-SE")}`,
-        "Vi hör av oss 👍"
+        "Perfekt 👍 bokningen är klar!",
+        "Vi hör av oss innan vi kommer 👍"
       ]
     });
+  }
+
+  if (msg.includes("nej")) {
+    delete users[userId];
+    saveMemory();
+
+    return res.json({
+      replies: ["Okej 👍 vi börjar om — vad behöver du hjälp med?"]
+    });
+  }
+
+  return res.json({
+    replies: ["Skriv 'ja' eller 'nej' 👍"]
+  });
+}
+
+// -------- CONFIRM BEFORE BOOKING --------
+if (
+  state.problem &&
+  state.name &&
+  state.phone &&
+  state.address &&
+  state.time &&
+  !state.awaitingConfirmation
+) {
+  state.awaitingConfirmation = true;
+  saveMemory();
+
+  return res.json({
+    replies: [
+      "Perfekt 👍 här är det jag har:",
+      `Problem: ${state.problem}`,
+      `Detaljer: ${state.details || "-"}`,
+      `Namn: ${state.name}`,
+      `Telefon: ${state.phone}`,
+      `Adress: ${state.address}`,
+      `Tid: ${new Date(state.time).toLocaleString("sv-SE")}`,
+      "Stämmer detta? (ja/nej)"
+    ]
+  });
+}
 
   } catch (err) {
     console.error(err);
