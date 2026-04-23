@@ -103,7 +103,11 @@ try {
 } catch {}
 
 function saveMemory() {
-  fs.writeFileSync("memory.json", JSON.stringify(users, null, 2));
+  try {
+    fs.writeFileSync("memory.json", JSON.stringify(users, null, 2));
+  } catch (err) {
+    console.error("Memory save failed:", err.message);
+  }
 }
 
 // -------- HELPERS --------
@@ -237,7 +241,40 @@ Problem: ${data.problem || "okänt"}
   });
 }
 
-// -------- MAIN --------
+async function aiExtract(message) {
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content: `
+Extract structured data from this Swedish message.
+
+Return ONLY JSON:
+{
+  "problem": "",
+  "name": "",
+  "phone": "",
+  "address": "",
+  "time": ""
+}
+`
+        },
+        {
+          role: "user",
+          content: message
+        }
+      ]
+    });
+
+    return JSON.parse(res.choices[0].message.content);
+
+  } catch {
+    return {};
+  }
+}
 
 app.post("/chat", async (req, res) => {
   try {
@@ -248,19 +285,93 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // 🔥 AI FILTER FIRST
+    // -------- CONFIRMATION HANDLING (SAFE) --------
+    if (state.awaitingConfirmation) {
+
+      if (msg.includes("ja")) {
+        await sendBookingEmail(state);
+
+        delete users[userId];
+        saveMemory();
+
+        return res.json({
+          replies: [
+            "Perfekt 👍 bokningen är klar!",
+            "Vi hör av oss innan vi kommer 👍"
+          ]
+        });
+      }
+
+      if (msg.includes("nej")) {
+        delete users[userId];
+        saveMemory();
+
+        return res.json({
+          replies: ["Okej 👍 vi börjar om — vad behöver du hjälp med?"]
+        });
+      }
+
+      return res.json({
+        replies: ["Stämmer det? Skriv 'ja' eller 'nej' 👍"]
+      });
+    }
+
+    // -------- AI AUTO-FILL --------
+    const aiData = await aiExtract(raw);
+
+    if (
+      aiData.problem &&
+      aiData.problem.length > 5 &&
+      !state.problem &&
+      !aiData.problem.match(/hej|tja|lol|test/i)
+    ) {
+      state.problem = aiData.problem;
+    }
+
+    if (
+      aiData.name &&
+      !state.name &&
+      aiData.name.length < 40 &&
+      !aiData.name.match(/rör|läck|dusch|problem/i)
+    ) {
+      state.name = capitalize(aiData.name);
+    }
+
+    if (aiData.phone && !state.phone) {
+      const p = normalizePhone(aiData.phone);
+      if (isValidPhone(p)) state.phone = p;
+    }
+
+    if (
+      aiData.address &&
+      !state.address &&
+      aiData.address.length < 60
+    ) {
+      state.address = capitalize(aiData.address);
+    }
+
+    if (aiData.time && !state.time) {
+      const parsed = parseSwedishDateTime(aiData.time);
+      if (parsed) state.time = parsed.toISOString();
+    }
+
+    saveMemory();
+
+    // -------- CHEAP FILTER --------
+    if (!state.problem && raw.length < 3) {
+      return res.json({
+        replies: ["Kan du skriva lite mer? 👍"]
+      });
+    }
+
+    // -------- AI FILTER --------
     if (!state.problem) {
       const relevant = await isRelevantAI(raw);
 
       if (!relevant) {
-        const reply = await aiEnhance(
-          state,
-          raw,
-          "Haha 😄 jag tror det där hamnade lite fel — gäller det något med rör?",
-          "User is off-topic, redirect politely to plumbing"
-        );
-
-        return res.json({ replies: [reply] });
+        return res.json({
+          replies: ["Haha 😄 gäller det något med rör?"]
+        });
       }
     }
 
@@ -270,37 +381,36 @@ app.post("/chat", async (req, res) => {
       saveMemory();
 
       return res.json({
-        replies: ["Oj det låter akut 😬 vill du att vi ringer dig direkt?"]
+        replies: ["Det låter akut 😬 vill du att vi ringer dig direkt?"]
       });
     }
 
-    // -------- CONTACT --------
-if (msg.match(/ring mig|ringa mig|kan ni ringa/i)) {
-
-  if (!state.problem) {
-    return res.json({
-      replies: ["Absolut 👍 vad gäller det först?"]
-    });
-  }
-
-  if (state.phone) {
-    state.awaitingCallTime = true;
-    saveMemory();
-
-    return res.json({
-      replies: ["När kan du prata? 👍"]
-    });
-  }
-
-  state.awaitingCallPhone = true;
-  saveMemory();
-
-  return res.json({
-    replies: ["Vilket nummer når vi dig på? 👍"]
-  });
-}
-
     // -------- CALL FLOW --------
+    if (msg.match(/ring mig|ringa mig|kan ni ringa/i)) {
+
+      if (!state.problem) {
+        return res.json({
+          replies: ["Absolut 👍 vad gäller det först?"]
+        });
+      }
+
+      if (state.phone) {
+        state.awaitingCallTime = true;
+        saveMemory();
+
+        return res.json({
+          replies: ["När kan du prata? 👍"]
+        });
+      }
+
+      state.awaitingCallPhone = true;
+      saveMemory();
+
+      return res.json({
+        replies: ["Vilket nummer når vi dig på? 👍"]
+      });
+    }
+
     if (state.awaitingCallPhone) {
       const phone = normalizePhone(raw);
 
@@ -329,52 +439,85 @@ if (msg.match(/ring mig|ringa mig|kan ni ringa/i)) {
     }
 
     // -------- PROBLEM --------
-if (!state.problem) {
-  state.problem = raw;
-  state.details = raw;
-  saveMemory();
+    if (!state.problem) {
+      state.problem = raw;
+      state.details = raw;
+      state.followUpAsked = false;
+      saveMemory();
 
-  return res.json({
-    replies: [
-      await aiEnhance(
-        state,
-        raw,
-        smartFollowUp(raw),
-        "Ask a smart follow-up question about the problem"
-      )
-    ]
-  });
-}
+      return res.json({
+        replies: [smartFollowUp(raw)]
+      });
+    }
 
+    // -------- FOLLOW-UP (ONLY ONCE) --------
+    if (state.problem && !state.followUpAsked && !state.name) {
+      state.followUpAsked = true;
+      saveMemory();
 
-if (state.problem && raw.length > (state.details?.length || 0)) {
-  state.details = raw;
-  saveMemory();
-}
+      return res.json({
+        replies: ["Okej 👍 vad heter du?"]
+      });
+    }
 
-    // -------- FLOW --------
+    // -------- DETAILS UPDATE --------
+    if (
+      state.problem &&
+      raw.length > (state.details?.length || 0) &&
+      raw.length > 10
+    ) {
+      state.details = raw;
+      saveMemory();
+    }
+
+    // -------- AUTO SKIP TO CONFIRM --------
+    if (
+      state.problem &&
+      state.name &&
+      state.phone &&
+      state.address &&
+      state.time
+    ) {
+      state.awaitingConfirmation = true;
+      saveMemory();
+
+      return res.json({
+        replies: [
+          "Perfekt 👍 här är din bokning:",
+          `Problem: ${state.problem}`,
+          `Detaljer: ${state.details || "-"}`,
+          `Namn: ${state.name}`,
+          `Telefon: ${state.phone}`,
+          `Adress: ${state.address}`,
+          `Tid: ${new Date(state.time).toLocaleString("sv-SE")}`,
+          "Stämmer detta? (ja/nej)"
+        ]
+      });
+    }
+
+    // -------- NAME --------
     if (!state.name) {
 
-  // reject non-name inputs
-  if (
-    raw.match(/\d/) ||                     // contains numbers
-    raw.length > 30 ||                     // too long
-    raw.split(" ").length > 3 ||           // too many words
-    raw.match(/rör|läck|stopp|vatten|dusch|problem/i) // plumbing words
-  ) {
-    return res.json({
-      replies: ["Vad heter du? (gärna för- och efternamn) 🙂"]
-    });
-  }
+      if (
+        raw.match(/\d/) ||
+        raw.length > 30 ||
+        raw.split(" ").length > 3 ||
+        raw.match(/rör|läck|stopp|vatten|dusch|problem/i)
+      ) {
+        return res.json({
+          replies: ["Vad heter du? 🙂"]
+        });
+      }
 
-  state.name = capitalize(raw);
-  saveMemory();
+      state.name = capitalize(raw);
+      saveMemory();
 
-  return res.json({
-    replies: [await aiEnhance(state, raw, "Vad har du för nummer?", "Ask for phone")]
-  });
-}
+      return res.json({
+        replies: ["Vad har du för nummer? 👍"]
+      });
+    }
 
+    // -------- PHONE --------
     if (!state.phone) {
       const phone = normalizePhone(raw);
 
@@ -386,10 +529,11 @@ if (state.problem && raw.length > (state.details?.length || 0)) {
       saveMemory();
 
       return res.json({
-        replies: [await aiEnhance(state, raw, "Vilken adress gäller det?", "Ask address")]
+        replies: ["Vilken adress gäller det?"]
       });
     }
 
+    // -------- ADDRESS --------
     if (!state.address) {
       if (!isValidAddress(raw)) {
         return res.json({ replies: ["Skriv adressen 👍"] });
@@ -399,87 +543,35 @@ if (state.problem && raw.length > (state.details?.length || 0)) {
       saveMemory();
 
       return res.json({
-        replies: [await aiEnhance(state, raw, "När passar det?", "Ask time")]
+        replies: ["När passar det? 👍"]
       });
     }
 
+    // -------- TIME --------
     if (!state.time) {
       const parsed = parseSwedishDateTime(raw);
 
       if (!parsed) {
         return res.json({
-          replies: [await aiEnhance(state, raw, "Vilken tid?", "Ask time clearly")]
+          replies: ["Vilken tid? 👍"]
         });
       }
 
       state.time = parsed.toISOString();
       saveMemory();
+
+      return res.json({
+        replies: ["Toppen 👍"]
+      });
     }
 
-    // -------- HANDLE CONFIRMATION --------
-if (state.awaitingConfirmation) {
-
-  if (msg.includes("ja")) {
-
-    await sendBookingEmail(state);
-
-    delete users[userId];
-    saveMemory();
-
+    // -------- FALLBACK --------
     return res.json({
-      replies: [
-        "Perfekt 👍 bokningen är klar!",
-        "Vi hör av oss innan vi kommer 👍"
-      ]
+      replies: ["Jag hängde inte riktigt med 🤔 kan du skriva igen?"]
     });
-  }
-
-  if (msg.includes("nej")) {
-    delete users[userId];
-    saveMemory();
-
-    return res.json({
-      replies: ["Okej 👍 vi börjar om — vad behöver du hjälp med?"]
-    });
-  }
-
-  return res.json({
-    replies: ["Skriv 'ja' eller 'nej' 👍"]
-  });
-}
-
-// -------- CONFIRM BEFORE BOOKING --------
-if (
-  state.problem &&
-  state.name &&
-  state.phone &&
-  state.address &&
-  state.time &&
-  !state.awaitingConfirmation
-) {
-  state.awaitingConfirmation = true;
-  saveMemory();
-
-  return res.json({
-    replies: [
-      "Perfekt 👍 här är det jag har:",
-      `Problem: ${state.problem}`,
-      `Detaljer: ${state.details || "-"}`,
-      `Namn: ${state.name}`,
-      `Telefon: ${state.phone}`,
-      `Adress: ${state.address}`,
-      `Tid: ${new Date(state.time).toLocaleString("sv-SE")}`,
-      "Stämmer detta? (ja/nej)"
-    ]
-  });
-}
 
   } catch (err) {
     console.error(err);
     res.json({ replies: ["⚠️ Något gick fel"] });
   }
-});
-
-app.listen(process.env.PORT || 3000, () => {
-  console.log("🔥 AI receptionist running");
 });
