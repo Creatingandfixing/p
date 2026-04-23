@@ -214,6 +214,8 @@ async function sendBookingEmail(data) {
     subject: `🚨 Ny bokning - ${BUSINESS_NAME}`,
     text: `
 Problem: ${data.problem}
+Detaljer: ${data.details || "Ej angivet"}
+
 Namn: ${data.name}
 Telefon: ${data.phone}
 Adress: ${data.address}
@@ -327,21 +329,28 @@ if (msg.match(/ring mig|ringa mig|kan ni ringa/i)) {
     }
 
     // -------- PROBLEM --------
-    if (!state.problem) {
-      state.problem = raw;
-      saveMemory();
+if (!state.problem) {
+  state.problem = raw;
+  state.details = raw;
+  saveMemory();
 
-      return res.json({
-        replies: [
-          await aiEnhance(
-            state,
-            raw,
-            smartFollowUp(raw),
-            "Ask a follow-up question about the problem"
-          )
-        ]
-      });
-    }
+  return res.json({
+    replies: [
+      await aiEnhance(
+        state,
+        raw,
+        smartFollowUp(raw),
+        "Ask a smart follow-up question about the problem"
+      )
+    ]
+  });
+}
+
+
+if (state.problem && raw.length > (state.details?.length || 0)) {
+  state.details = raw;
+  saveMemory();
+}
 
     // -------- FLOW --------
     if (!state.name) {
