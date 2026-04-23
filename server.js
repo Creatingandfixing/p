@@ -22,6 +22,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+// 🔥 HUMAN REPLY
 async function aiReply(state, userMessage, instruction) {
   try {
     const res = await openai.chat.completions.create({
@@ -39,7 +40,7 @@ Du är en trevlig svensk rörmokare.
 - Max 1 emoji
 - Ställ max en fråga
 
-Kundinfo:
+INFO:
 Problem: ${state.problem || "okänt"}
 `
         },
@@ -52,8 +53,7 @@ Problem: ${state.problem || "okänt"}
 
     return res.choices[0].message.content;
 
-  } catch (err) {
-    console.error("AI error:", err.message);
+  } catch {
     return null;
   }
 }
@@ -63,8 +63,35 @@ async function aiEnhance(state, msg, fallback, instruction) {
   return reply || fallback;
 }
 
-function isUrgent(text) {
-  return text.match(/akut|sprutar|forsar|översvämning|panik/i);
+// 🔥 AI FILTER (IMPORTANT)
+async function isRelevantAI(message) {
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      max_tokens: 5,
+      messages: [
+        {
+          role: "system",
+          content: `
+Return ONLY "yes" or "no".
+
+YES = message is about plumbing, water, pipes, bathroom, kitchen issues
+NO = jokes, spam, nonsense, unrelated
+`
+        },
+        {
+          role: "user",
+          content: message
+        }
+      ]
+    });
+
+    return res.choices[0].message.content.toLowerCase().includes("yes");
+
+  } catch {
+    return true; // fallback safe
+  }
 }
 
 // -------- MEMORY --------
@@ -72,11 +99,8 @@ function isUrgent(text) {
 let users = {};
 
 try {
-  const data = fs.readFileSync("memory.json", "utf-8");
-  users = JSON.parse(data);
-} catch {
-  users = {};
-}
+  users = JSON.parse(fs.readFileSync("memory.json", "utf-8"));
+} catch {}
 
 function saveMemory() {
   fs.writeFileSync("memory.json", JSON.stringify(users, null, 2));
@@ -104,37 +128,16 @@ function normalizePhone(phone) {
 }
 
 function isValidPhone(phone) {
-  return typeof phone === "string" && /^\d{7,15}$/.test(phone);
+  return /^\d{7,15}$/.test(phone);
 }
 
 function isValidAddress(addr) {
-  return typeof addr === "string" && addr.length > 4 && /\d/.test(addr);
+  return addr && addr.length > 4 && /\d/.test(addr);
 }
 
-function detectIntent(msg) {
-  if (msg.match(/\b(ja|gärna|ok|kör|absolut)\b/i)) return "yes";
-  if (msg.match(/\b(nej|inte|sen|inte än)\b/i)) return "no";
-  if (msg.match(/\b(ring|kontakta)\b/i)) return "contact";
-  if (msg.match(/\?/)) return "question";
-  if (msg.match(/vet inte|kanske/i)) return "hesitation";
-  return "normal";
+function isUrgent(text) {
+  return text.match(/akut|sprutar|forsar|översvämning|panik/i);
 }
-
-function smartFollowUp(problem = "") {
-  const text = problem.toLowerCase();
-
-  if (text.includes("läcker")) {
-    return "Okej 👍 rinner det hela tiden eller bara lite?";
-  }
-
-  if (text.includes("stopp")) {
-    return "Okej 👍 är det helt stopp eller rinner det undan lite?";
-  }
-
-  return "Okej 👍 kan du beskriva lite mer?";
-}
-
-// -------- DATE --------
 
 function parseSwedishDateTime(text) {
   const now = new Date();
@@ -198,64 +201,26 @@ app.post("/chat", async (req, res) => {
   try {
     const raw = req.body.message || "";
     const msg = clean(raw);
-    const intent = detectIntent(msg);
-
     const userId = req.body.userId || "default-user";
 
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // -------- AI UNDERSTANDING --------
-    try {
-      const aiData = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content: "Extract structured data from Swedish message."
-          },
-          {
-            role: "user",
-            content: `
-Extract:
+    // 🔥 AI FILTER FIRST
+    if (!state.problem) {
+      const relevant = await isRelevantAI(raw);
 
-- problem
-- name
-- phone
-- address
-- time
+      if (!relevant) {
+        const reply = await aiEnhance(
+          state,
+          raw,
+          "Haha 😄 jag tror det där hamnade lite fel — gäller det något med rör?",
+          "User is off-topic, redirect politely to plumbing"
+        );
 
-Return ONLY JSON:
-{
-  "problem": "",
-  "name": "",
-  "phone": "",
-  "address": "",
-  "time": ""
-}
-
-Message: "${raw}"
-`
-          }
-        ]
-      });
-
-      const parsed = JSON.parse(aiData.choices[0].message.content);
-
-      if (parsed.problem && !state.problem) state.problem = parsed.problem;
-      if (parsed.name && !state.name) state.name = capitalize(parsed.name);
-      if (parsed.phone && !state.phone) state.phone = normalizePhone(parsed.phone);
-      if (parsed.address && !state.address) state.address = capitalize(parsed.address);
-
-      if (parsed.time && !state.time) {
-        const t = parseSwedishDateTime(parsed.time);
-        if (t) state.time = t.toISOString();
+        return res.json({ replies: [reply] });
       }
-
-    } catch {}
-
-    saveMemory();
+    }
 
     // -------- URGENT --------
     if (!state.urgent && isUrgent(msg)) {
@@ -276,8 +241,8 @@ Message: "${raw}"
       }
 
       state.phone = phone;
-      state.awaitingCallPhone = false;
       state.awaitingCallTime = true;
+      state.awaitingCallPhone = false;
       saveMemory();
 
       return res.json({ replies: ["När kan du prata? 👍"] });
@@ -300,14 +265,16 @@ Message: "${raw}"
       state.problem = raw;
       saveMemory();
 
-      const reply = await aiEnhance(
-        state,
-        raw,
-        smartFollowUp(raw),
-        "Ask a relevant follow-up question"
-      );
-
-      return res.json({ replies: [reply] });
+      return res.json({
+        replies: [
+          await aiEnhance(
+            state,
+            raw,
+            "Okej 👍 kan du beskriva lite mer?",
+            "Ask a follow-up question about the problem"
+          )
+        ]
+      });
     }
 
     // -------- FLOW --------
@@ -316,7 +283,7 @@ Message: "${raw}"
       saveMemory();
 
       return res.json({
-        replies: [await aiEnhance(state, raw, "Vad har du för nummer?", "Ask for phone")]
+        replies: [await aiEnhance(state, raw, "Vad heter du?", "Ask for name")]
       });
     }
 
@@ -331,7 +298,7 @@ Message: "${raw}"
       saveMemory();
 
       return res.json({
-        replies: [await aiEnhance(state, raw, "Vilken adress gäller det?", "Ask for address")]
+        replies: [await aiEnhance(state, raw, "Vilken adress gäller det?", "Ask address")]
       });
     }
 
@@ -344,7 +311,7 @@ Message: "${raw}"
       saveMemory();
 
       return res.json({
-        replies: [await aiEnhance(state, raw, "När passar det?", "Ask for time")]
+        replies: [await aiEnhance(state, raw, "När passar det?", "Ask time")]
       });
     }
 
@@ -353,7 +320,7 @@ Message: "${raw}"
 
       if (!parsed) {
         return res.json({
-          replies: [await aiEnhance(state, raw, "Vilken tid?", "Ask for time clearly")]
+          replies: [await aiEnhance(state, raw, "Vilken tid?", "Ask time clearly")]
         });
       }
 
@@ -380,4 +347,6 @@ Message: "${raw}"
   }
 });
 
-app.listen(process.env.PORT || 3000);
+app.listen(process.env.PORT || 3000, () => {
+  console.log("🔥 AI receptionist running");
+});
