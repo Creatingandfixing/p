@@ -5,6 +5,7 @@ import express from "express";
 import cors from "cors";
 import nodemailer from "nodemailer";
 import fs from "fs";
+import OpenAI from "openai";
 
 const app = express();
 
@@ -14,6 +15,57 @@ app.use(express.static("public"));
 
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "Johanneshovrör";
 const OWNER_EMAIL = process.env.BOOKING_EMAIL || process.env.EMAIL_USER;
+
+// -------- AI --------
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+async function aiReply(state, userMessage, instruction) {
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.6,
+      max_tokens: 80,
+      messages: [
+        {
+          role: "system",
+          content: `
+Du är en trevlig svensk rörmokare.
+
+- Svara kort (1 mening)
+- Låter naturlig
+- Max 1 emoji
+- Ställ max en fråga
+
+Kundinfo:
+Problem: ${state.problem || "okänt"}
+`
+        },
+        {
+          role: "user",
+          content: `${userMessage}\n\nInstruction: ${instruction}`
+        }
+      ]
+    });
+
+    return res.choices[0].message.content;
+
+  } catch (err) {
+    console.error("AI error:", err.message);
+    return null;
+  }
+}
+
+async function aiEnhance(state, msg, fallback, instruction) {
+  const reply = await aiReply(state, msg, instruction);
+  return reply || fallback;
+}
+
+function isUrgent(text) {
+  return text.match(/akut|sprutar|forsar|översvämning|panik/i);
+}
 
 // -------- MEMORY --------
 
@@ -27,11 +79,7 @@ try {
 }
 
 function saveMemory() {
-  try {
-    fs.writeFileSync("memory.json", JSON.stringify(users, null, 2));
-  } catch (e) {
-    console.error("Memory save failed:", e.message);
-  }
+  fs.writeFileSync("memory.json", JSON.stringify(users, null, 2));
 }
 
 // -------- HELPERS --------
@@ -63,12 +111,6 @@ function isValidAddress(addr) {
   return typeof addr === "string" && addr.length > 4 && /\d/.test(addr);
 }
 
-function human(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-// -------- INTENT --------
-
 function detectIntent(msg) {
   if (msg.match(/\b(ja|gärna|ok|kör|absolut)\b/i)) return "yes";
   if (msg.match(/\b(nej|inte|sen|inte än)\b/i)) return "no";
@@ -78,20 +120,18 @@ function detectIntent(msg) {
   return "normal";
 }
 
-// -------- FOLLOW-UP --------
-
 function smartFollowUp(problem = "") {
   const text = problem.toLowerCase();
 
   if (text.includes("läcker")) {
-    return "Okej 👍 låter som läckage — rinner det hela tiden eller bara lite?";
+    return "Okej 👍 rinner det hela tiden eller bara lite?";
   }
 
   if (text.includes("stopp")) {
     return "Okej 👍 är det helt stopp eller rinner det undan lite?";
   }
 
-  return "Okej 👍 vad är det som strular mer exakt?";
+  return "Okej 👍 kan du beskriva lite mer?";
 }
 
 // -------- DATE --------
@@ -104,26 +144,11 @@ function parseSwedishDateTime(text) {
     date.setDate(now.getDate() + 1);
   }
 
-  const days = {
-    söndag: 0, måndag: 1, tisdag: 2,
-    onsdag: 3, torsdag: 4, fredag: 5, lördag: 6
-  };
-
-  for (let day in days) {
-    if (text.includes(day)) {
-      const target = days[day];
-      const diff = (target - now.getDay() + 7) % 7 || 7;
-      date.setDate(now.getDate() + diff);
-    }
-  }
-
   const match = text.match(/(\d{1,2})(?::(\d{2}))?/);
   if (!match) return null;
 
   date.setHours(parseInt(match[1]));
   date.setMinutes(parseInt(match[2] || "0"));
-  date.setSeconds(0);
-
   return date;
 }
 
@@ -133,7 +158,6 @@ const transporter = nodemailer.createTransport({
   host: "send.one.com",
   port: 587,
   secure: false,
-  family: 4,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
@@ -151,39 +175,7 @@ Namn: ${data.name}
 Telefon: ${data.phone}
 Adress: ${data.address}
 Tid: ${new Date(data.time).toLocaleString("sv-SE")}
-    `
-  });
-}
-
-async function sendUpdateEmail(data) {
-  await transporter.sendMail({
-    from: process.env.EMAIL_USER,
-    to: OWNER_EMAIL,
-    subject: `🔄 Ändrad bokning - ${BUSINESS_NAME}`,
-    text: `
-UPPDATERAD BOKNING
-
-Problem: ${data.problem}
-Namn: ${data.name}
-Telefon: ${data.phone}
-Adress: ${data.address}
-Ny tid: ${new Date(data.time).toLocaleString("sv-SE")}
-    `
-  });
-}
-
-async function sendCancelEmail(data) {
-  await transporter.sendMail({
-    from: process.env.EMAIL_USER,
-    to: OWNER_EMAIL,
-    subject: `❌ Avbokning - ${BUSINESS_NAME}`,
-    text: `
-AVBOKNING
-
-Namn: ${data.name || "okänd"}
-Telefon: ${data.phone || "saknas"}
-Problem: ${data.problem || "okänt"}
-    `
+`
   });
 }
 
@@ -193,11 +185,10 @@ async function sendCallRequest(data) {
     to: OWNER_EMAIL,
     subject: `📞 Ring upp kund`,
     text: `
-Namn: ${data.name || "okänd"}
-Telefon: ${data.phone || "saknas"}
-Tid: ${data.callTime || "ej angiven"}
+Telefon: ${data.phone}
+Tid: ${data.callTime}
 Problem: ${data.problem || "okänt"}
-    `
+`
   });
 }
 
@@ -214,69 +205,74 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // -------- 🚨 URGENCY DETECTION (AKUT LÄCKA) --------
+    // -------- AI UNDERSTANDING --------
+    try {
+      const aiData = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0.2,
+        messages: [
+          {
+            role: "system",
+            content: "Extract structured data from Swedish message."
+          },
+          {
+            role: "user",
+            content: `
+Extract:
 
-    if (msg.match(/sprutar|forsar|läcker.*mycket|översvämning|akut/i)) {
+- problem
+- name
+- phone
+- address
+- time
 
-      if (state.phone) {
-        state.awaitingCallTime = true;
-        saveMemory();
+Return ONLY JSON:
+{
+  "problem": "",
+  "name": "",
+  "phone": "",
+  "address": "",
+  "time": ""
+}
 
-        return res.json({
-          replies: [
-            "Det låter akut 😬 vi ringer dig direkt — när kan du prata?"
-          ]
-        });
+Message: "${raw}"
+`
+          }
+        ]
+      });
+
+      const parsed = JSON.parse(aiData.choices[0].message.content);
+
+      if (parsed.problem && !state.problem) state.problem = parsed.problem;
+      if (parsed.name && !state.name) state.name = capitalize(parsed.name);
+      if (parsed.phone && !state.phone) state.phone = normalizePhone(parsed.phone);
+      if (parsed.address && !state.address) state.address = capitalize(parsed.address);
+
+      if (parsed.time && !state.time) {
+        const t = parseSwedishDateTime(parsed.time);
+        if (t) state.time = t.toISOString();
       }
 
-      state.awaitingCallPhone = true;
+    } catch {}
+
+    saveMemory();
+
+    // -------- URGENT --------
+    if (!state.urgent && isUrgent(msg)) {
+      state.urgent = true;
       saveMemory();
 
       return res.json({
-        replies: [
-          "Det låter akut 😬 vi ringer dig direkt — vilket nummer når vi dig på?"
-        ]
-      });
-    }
-
-    // -------- AFTER BOOKING --------
-
-    if (state.booked) {
-
-      if (msg.match(/avboka/i)) {
-        await sendCancelEmail(state);
-        delete users[userId];
-        saveMemory();
-
-        return res.json({
-          replies: ["Okej 👍 jag tar bort bokningen direkt"]
-        });
-      }
-
-      if (msg.match(/ändra|byta/i)) {
-        state.updating = true;
-        state.time = null;
-        saveMemory();
-
-        return res.json({
-          replies: ["Självklart 👍 vilken ny tid passar bättre?"]
-        });
-      }
-
-      return res.json({
-        replies: ["Du är redan bokad 👍 vill du ändra något eller avboka?"]
+        replies: ["Oj det låter akut 😬 vill du att vi ringer dig direkt?"]
       });
     }
 
     // -------- CALL FLOW --------
-
     if (state.awaitingCallPhone) {
       const phone = normalizePhone(raw);
 
       if (!isValidPhone(phone)) {
-        return res.json({
-          replies: ["Skicka ett nummer 👍"]
-        });
+        return res.json({ replies: ["Skriv ett nummer 👍"] });
       }
 
       state.phone = phone;
@@ -284,9 +280,7 @@ app.post("/chat", async (req, res) => {
       state.awaitingCallTime = true;
       saveMemory();
 
-      return res.json({
-        replies: ["När kan du prata? 👍"]
-      });
+      return res.json({ replies: ["När kan du prata? 👍"] });
     }
 
     if (state.awaitingCallTime) {
@@ -297,155 +291,69 @@ app.post("/chat", async (req, res) => {
       await sendCallRequest(state);
 
       return res.json({
-        replies: [`Toppen 👍 vi ringer dig ${state.callTime}`]
+        replies: [`Vi ringer dig ${state.callTime} 👍`]
       });
     }
 
-    // -------- CONTACT --------
-
-    if (intent === "contact") {
-
-      if (msg.match(/ringa mig|ring mig|kan ni ringa/i)) {
-
-        if (!state.problem) {
-          return res.json({
-            replies: ["Absolut 👍 vad gäller det?"]
-          });
-        }
-
-        if (state.phone) {
-          state.awaitingCallTime = true;
-          saveMemory();
-
-          return res.json({
-            replies: ["När passar det att vi ringer? 👍"]
-          });
-        }
-
-        state.awaitingCallPhone = true;
-        saveMemory();
-
-        return res.json({
-          replies: ["Vilket nummer når vi dig på? 👍"]
-        });
-      }
-
-      if (msg.match(/ringa er|kan jag ringa/i)) {
-        return res.json({
-          replies: [
-            "Du kan ringa oss via hemsidan 👍 vill du att vi ringer dig istället?"
-          ]
-        });
-      }
-    }
-
-    // -------- GREETING --------
-
-    if (msg === "hej" || msg === "tja") {
-      return res.json({
-        replies: ["Tja 👍 vad har hänt?"]
-      });
-    }
-
-    // -------- PROBLEM (FIRST STEP) --------
-
-    if (!state.problem && msg.length > 3) {
+    // -------- PROBLEM --------
+    if (!state.problem) {
       state.problem = raw;
-      state.followUpDone = false;
       saveMemory();
 
-      return res.json({
-        replies: [smartFollowUp(state.problem)]
-      });
+      const reply = await aiEnhance(
+        state,
+        raw,
+        smartFollowUp(raw),
+        "Ask a relevant follow-up question"
+      );
+
+      return res.json({ replies: [reply] });
     }
 
-    // -------- FOLLOW-UP FIX (NO LOOP) --------
-
-    if (state.problem && !state.followUpDone) {
-      state.followUpDone = true;
-      saveMemory();
-
-      return res.json({
-        replies: [
-          "Okej 👍 det där fixar vi. Vill du boka eller ska vi ringa dig?"
-        ]
-      });
-    }
-
-    // -------- TRANSITION --------
-
-    if (
-  state.problem &&
-  !state.readyToBook &&
-  !state.awaitingCallPhone &&
-  !state.awaitingCallTime &&
-  intent !== "contact"
-) {
-  state.readyToBook = true;
-  saveMemory();
-
-  return res.json({
-    replies: [
-      "Det där fixar vi 👍 vill du boka eller ska vi ringa dig?"
-    ]
-  });
-}
-
-    // -------- NAME --------
-
+    // -------- FLOW --------
     if (!state.name) {
       state.name = capitalize(raw);
       saveMemory();
 
       return res.json({
-        replies: ["Toppen 👍 vad har du för nummer?"]
+        replies: [await aiEnhance(state, raw, "Vad har du för nummer?", "Ask for phone")]
       });
     }
-
-    // -------- PHONE --------
 
     if (!state.phone) {
       const phone = normalizePhone(raw);
 
       if (!isValidPhone(phone)) {
-        return res.json({
-          replies: ["Skriv ett giltigt nummer 👍"]
-        });
+        return res.json({ replies: ["Skriv ett giltigt nummer 👍"] });
       }
 
       state.phone = phone;
       saveMemory();
 
       return res.json({
-        replies: ["Vilken adress gäller det?"]
+        replies: [await aiEnhance(state, raw, "Vilken adress gäller det?", "Ask for address")]
       });
     }
 
-    // -------- ADDRESS --------
-
     if (!state.address) {
       if (!isValidAddress(raw)) {
-        return res.json({
-          replies: ["Skriv adressen 👍"]
-        });
+        return res.json({ replies: ["Skriv adressen 👍"] });
       }
 
       state.address = capitalize(raw);
       saveMemory();
 
       return res.json({
-        replies: ["När passar det? 👍"]
+        replies: [await aiEnhance(state, raw, "När passar det?", "Ask for time")]
       });
     }
-
-    // -------- TIME --------
 
     if (!state.time) {
       const parsed = parseSwedishDateTime(raw);
 
       if (!parsed) {
         return res.json({
-          replies: ["Vilken tid ungefär? 👍"]
+          replies: [await aiEnhance(state, raw, "Vilken tid?", "Ask for time clearly")]
         });
       }
 
@@ -453,21 +361,16 @@ app.post("/chat", async (req, res) => {
       saveMemory();
     }
 
-    // -------- BOOKING --------
+    // -------- BOOK --------
+    await sendBookingEmail(state);
 
-    if (state.updating) {
-      await sendUpdateEmail(state);
-      state.updating = false;
-    } else {
-      await sendBookingEmail(state);
-    }
-
-    state.booked = true;
+    delete users[userId];
     saveMemory();
 
     return res.json({
       replies: [
-        `Perfekt 👍 vi bokar in dig ${new Date(state.time).toLocaleString("sv-SE")}`
+        `Perfekt 👍 bokat ${new Date(state.time).toLocaleString("sv-SE")}`,
+        "Vi hör av oss 👍"
       ]
     });
 
@@ -477,8 +380,4 @@ app.post("/chat", async (req, res) => {
   }
 });
 
-// -------- START --------
-
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Server running...");
-});
+app.listen(process.env.PORT || 3000);
