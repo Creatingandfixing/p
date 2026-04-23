@@ -157,15 +157,41 @@ function parseSwedishDateTime(text) {
   const now = new Date();
   let date = new Date(now);
 
-  if (/imorgon/i.test(text)) {
+  text = text.toLowerCase();
+
+  // ---- MONTHS ----
+  const months = {
+    januari: 0, februari: 1, mars: 2, april: 3,
+    maj: 4, juni: 5, juli: 6, augusti: 7,
+    september: 8, oktober: 9, november: 10, december: 11
+  };
+
+  // ---- DATE (e.g. "14 maj") ----
+  for (let month in months) {
+    const regex = new RegExp(`(\\d{1,2})\\s*${month}`);
+    const match = text.match(regex);
+
+    if (match) {
+      date.setDate(parseInt(match[1]));
+      date.setMonth(months[month]);
+    }
+  }
+
+  // ---- TOMORROW ----
+  if (text.includes("imorgon")) {
     date.setDate(now.getDate() + 1);
   }
 
-  const match = text.match(/(\d{1,2})(?::(\d{2}))?/);
-  if (!match) return null;
+  // ---- TIME ----
+  const timeMatch = text.match(/kl\s*(\d{1,2})(?::(\d{2}))?/);
 
-  date.setHours(parseInt(match[1]));
-  date.setMinutes(parseInt(match[2] || "0"));
+  if (timeMatch) {
+    date.setHours(parseInt(timeMatch[1]));
+    date.setMinutes(parseInt(timeMatch[2] || "0"));
+  } else {
+    return null;
+  }
+
   return date;
 }
 
