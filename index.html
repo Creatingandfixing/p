@@ -9,7 +9,6 @@
     margin: 0;
   }
 
-  /* -------- BUTTON -------- */
   #chat-button {
     position: fixed;
     bottom: 20px;
@@ -23,15 +22,8 @@
     border: none;
     cursor: pointer;
     box-shadow: 0 8px 25px rgba(37, 99, 235, 0.4);
-    transition: transform 0.2s ease;
-    z-index: 10;
   }
 
-  #chat-button:hover {
-    transform: scale(1.05);
-  }
-
-  /* -------- HINT -------- */
   #chat-hint {
     position: fixed;
     bottom: 90px;
@@ -42,15 +34,8 @@
     box-shadow: 0 10px 30px rgba(0,0,0,0.15);
     font-size: 13px;
     cursor: pointer;
-    animation: fadeIn 0.4s ease;
   }
 
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  /* -------- WIDGET -------- */
   #chat-widget {
     display: none;
     position: fixed;
@@ -63,33 +48,16 @@
     box-shadow: 0 20px 60px rgba(0,0,0,0.25);
     overflow: hidden;
     flex-direction: column;
-    animation: slideUp 0.25s ease;
   }
 
-  @keyframes slideUp {
-    from { transform: translateY(20px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
-  }
-
-  /* -------- HEADER -------- */
   #chat-header {
     background: linear-gradient(135deg, #2563eb, #1e40af);
     color: white;
     padding: 14px;
-    font-weight: 600;
-    font-size: 14px;
     display: flex;
     justify-content: space-between;
-    align-items: center;
   }
 
-  #chat-header span {
-    font-size: 12px;
-    opacity: 0.8;
-    cursor: pointer;
-  }
-
-  /* -------- CHAT BOX -------- */
   #chat-box {
     flex: 1;
     padding: 12px;
@@ -100,64 +68,27 @@
     gap: 6px;
   }
 
-  /* -------- MESSAGES -------- */
   .msg {
     padding: 10px 14px;
     border-radius: 16px;
     max-width: 75%;
-    font-size: 14px;
-    line-height: 1.4;
-    word-wrap: break-word;
   }
 
   .user {
-    background: linear-gradient(135deg, #2563eb, #1e40af);
+    background: #2563eb;
     color: white;
     align-self: flex-end;
-    border-bottom-right-radius: 6px;
   }
 
   .bot {
     background: white;
-    color: #111;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
     align-self: flex-start;
-    border-bottom-left-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
   }
 
-  /* -------- TYPING -------- */
-  .typing {
-    display: flex;
-    gap: 6px;
-    padding: 10px 14px;
-    background: white;
-    border-radius: 16px;
-    width: fit-content;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-  }
-
-  .dot {
-    width: 6px;
-    height: 6px;
-    background: #666;
-    border-radius: 50%;
-    animation: blink 1.4s infinite;
-  }
-
-  .dot:nth-child(2) { animation-delay: 0.2s; }
-  .dot:nth-child(3) { animation-delay: 0.4s; }
-
-  @keyframes blink {
-    0% { opacity: 0.2; }
-    20% { opacity: 1; }
-    100% { opacity: 0.2; }
-  }
-
-  /* -------- INPUT -------- */
   #chat-input-area {
     display: flex;
     padding: 10px;
-    background: white;
     border-top: 1px solid #eee;
   }
 
@@ -165,47 +96,24 @@
     flex: 1;
     border: 1px solid #ddd;
     border-radius: 999px;
-    padding: 10px 14px;
-    outline: none;
-    font-size: 14px;
-  }
-
-  #chat-input:focus {
-    border-color: #2563eb;
+    padding: 10px;
   }
 
   #send-btn {
     margin-left: 8px;
-    background: linear-gradient(135deg, #2563eb, #1e40af);
+    background: #2563eb;
     color: white;
     border: none;
     border-radius: 999px;
     padding: 10px 14px;
     cursor: pointer;
   }
-
-  /* -------- MOBILE -------- */
-  @media (max-width: 500px) {
-    #chat-widget {
-      width: 100%;
-      height: 100%;
-      bottom: 0;
-      right: 0;
-      border-radius: 0;
-    }
-
-    #chat-button {
-      bottom: 15px;
-      right: 15px;
-    }
-  }
-</style>
+  </style>
 </head>
 
 <body>
 
 <h1>Johanneshovrör</h1>
-<p>Välkommen! Vi hjälper dig med VVS.</p>
 
 <div id="chat-hint" onclick="openChat()">
   Behöver du hjälp? Boka här 👋
@@ -215,51 +123,34 @@
 
 <div id="chat-widget">
   <div id="chat-header">
-    Johanneshovrör Support
+    Support
     <span onclick="clearChat()">Rensa</span>
   </div>
 
   <div id="chat-box"></div>
 
   <div id="chat-input-area">
-    <input id="chat-input" placeholder="Skriv meddelande...">
+    <input id="chat-input" placeholder="Skriv...">
     <button id="send-btn" onclick="sendMessage()">➤</button>
   </div>
 </div>
 
 <script>
-
-// -------- USER --------
 const userId = localStorage.getItem("userId") || crypto.randomUUID();
 localStorage.setItem("userId", userId);
 
-// -------- HISTORY --------
-function loadHistory() {
-  let history = JSON.parse(localStorage.getItem("chatHistory") || "[]");
-  history.slice(-50).forEach(msg => addMessage(msg.text, msg.sender, false));
-}
-
-function saveMessage(text, sender) {
-  let history = JSON.parse(localStorage.getItem("chatHistory") || "[]");
-
-  history.push({ text, sender });
-
-  if (history.length > 50) {
-    history = history.slice(-50);
-  }
-
-  localStorage.setItem("chatHistory", JSON.stringify(history));
-}
+let isSending = false;
 
 // -------- UI --------
 function toggleChat() {
-  let chat = document.getElementById("chat-widget");
+  const chat = document.getElementById("chat-widget");
 
   if (chat.style.display === "flex") {
     chat.style.display = "none";
   } else {
     chat.style.display = "flex";
     document.getElementById("chat-input").focus();
+    document.getElementById("chat-hint").style.display = "none";
   }
 }
 
@@ -270,71 +161,49 @@ function openChat() {
 
 function clearChat() {
   localStorage.removeItem("chatHistory");
-  const box = document.getElementById("chat-box");
-  box.innerHTML = "";
+  document.getElementById("chat-box").innerHTML = "";
   addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
 }
 
+// -------- CHAT --------
 function addMessage(text, sender, save = true) {
-  let box = document.getElementById("chat-box");
+  const box = document.getElementById("chat-box");
 
-  let div = document.createElement("div");
-  div.classList.add("msg", sender);
+  const div = document.createElement("div");
+  div.className = "msg " + sender;
   div.innerText = text;
 
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
 
-  if (save) saveMessage(text, sender);
+  if (save) {
+    let history = JSON.parse(localStorage.getItem("chatHistory") || "[]");
+    history.push({ text, sender });
+    localStorage.setItem("chatHistory", JSON.stringify(history.slice(-50)));
+  }
 }
 
 // -------- TYPING --------
 function showTyping() {
-  removeTyping();
+  const box = document.getElementById("chat-box");
 
-  let box = document.getElementById("chat-box");
-
-  let typing = document.createElement("div");
-  typing.classList.add("typing");
+  const typing = document.createElement("div");
   typing.id = "typing";
-
-  typing.innerHTML = `
-    <div class="dot"></div>
-    <div class="dot"></div>
-    <div class="dot"></div>
-  `;
+  typing.className = "msg bot";
+  typing.innerText = "...";
 
   box.appendChild(typing);
-  box.scrollTop = box.scrollHeight;
 }
 
 function removeTyping() {
-  let typing = document.getElementById("typing");
-  if (typing) typing.remove();
-}
-
-// -------- FETCH RETRY --------
-async function fetchWithRetry(url, options, retries = 2) {
-  try {
-    let res = await fetch(url, options);
-    if (!res.ok) throw new Error();
-    return await res.json();
-  } catch (err) {
-    if (retries > 0) {
-      await new Promise(r => setTimeout(r, 1000));
-      return fetchWithRetry(url, options, retries - 1);
-    } else {
-      throw err;
-    }
-  }
+  const el = document.getElementById("typing");
+  if (el) el.remove();
 }
 
 // -------- SEND --------
-let isSending = false;
-
 async function sendMessage() {
-  let input = document.getElementById("chat-input");
-  let msg = input.value.trim();
+  const input = document.getElementById("chat-input");
+  const msg = input.value.trim();
 
   if (!msg || isSending) return;
 
@@ -346,44 +215,52 @@ async function sendMessage() {
   showTyping();
 
   try {
-    // Wake backend (Render cold start)
-    await fetch("https://ai-rormokare.onrender.com/");
+    // ✅ fixed ping
+    await fetch("https://ai-rormokare.onrender.com/ping");
 
-    const data = await fetchWithRetry(
-      "https://ai-rormokare.onrender.com/chat",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg, userId })
-      }
-    );
+    const res = await fetch("https://ai-rormokare.onrender.com/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: msg, userId })
+    });
+
+    const data = await res.json();
 
     removeTyping();
 
-    for (let reply of data.replies) {
-      addMessage(reply, "bot");
-    }
+    data.replies.forEach(r => addMessage(r, "bot"));
 
-  } catch (err) {
+  } catch {
     removeTyping();
-    addMessage("⚠️ Kunde inte nå servern. Försök igen.", "bot");
+    addMessage("⚠️ Kunde inte nå servern.", "bot");
   }
 
   isSending = false;
 }
 
-// -------- ENTER --------
+// -------- ENTER FIX --------
 document.getElementById("chat-input").addEventListener("keypress", e => {
-  if (e.key === "Enter") sendMessage();
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
 });
 
 // -------- INIT --------
-loadHistory();
+(function init() {
+  const history = JSON.parse(localStorage.getItem("chatHistory") || "[]");
 
-if (JSON.parse(localStorage.getItem("chatHistory") || "[]").length === 0) {
-  addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
-}
+  history.forEach(m => addMessage(m.text, m.sender, false));
 
+  if (history.length === 0) {
+    addMessage("Tja! Vad kan jag hjälpa dig med? 🙂", "bot");
+  }
+
+  // optional: show hint after delay
+  setTimeout(() => {
+    document.getElementById("chat-hint").style.display = "block";
+  }, 2000);
+})();
 </script>
 
 </body>
