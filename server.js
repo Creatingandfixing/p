@@ -285,7 +285,7 @@ app.post("/chat", async (req, res) => {
     if (!users[userId]) users[userId] = {};
     let state = users[userId];
 
-    // -------- CONFIRMATION HANDLING (SAFE) --------
+    // -------- CONFIRMATION --------
     if (state.awaitingConfirmation) {
 
       if (msg.includes("ja")) {
@@ -313,6 +313,13 @@ app.post("/chat", async (req, res) => {
 
       return res.json({
         replies: ["Stämmer det? Skriv 'ja' eller 'nej' 👍"]
+      });
+    }
+
+    // -------- GREETING --------
+    if (!state.problem && /hej|tja|hallå/.test(msg)) {
+      return res.json({
+        replies: ["Hej! Vad kan jag hjälpa dig med? 🙂"]
       });
     }
 
@@ -355,32 +362,23 @@ app.post("/chat", async (req, res) => {
       if (parsed) state.time = parsed.toISOString();
     }
 
-    saveMemory();
-
-    // -------- CHEAP FILTER --------
-    if (!state.problem && raw.length < 3) {
-      return res.json({
-        replies: ["Kan du skriva lite mer? 👍"]
-      });
+    // -------- REGEX FALLBACK (IMPORTANT) --------
+    if (!state.problem && /läck|stopp|vatten|dusch|kran/i.test(raw)) {
+      state.problem = raw;
     }
 
-    // -------- GREETING FIX --------
-if (!state.problem && /hej|tja|hallå/.test(msg)) {
-  return res.json({
-    replies: ["Hej! Vad kan jag hjälpa dig med? 🙂"]
-  });
-}
+    saveMemory();
 
-// -------- AI FILTER --------
-if (!state.problem) {
-  const relevant = await isRelevantAI(raw);
+    // -------- FILTER --------
+    if (!state.problem) {
+      const relevant = await isRelevantAI(raw);
 
-  if (!relevant) {
-    return res.json({
-      replies: ["Haha 😄 gäller det något med rör?"]
-    });
-  }
-}
+      if (!relevant) {
+        return res.json({
+          replies: ["Haha 😄 gäller det något med rör?"]
+        });
+      }
+    }
 
     // -------- URGENT --------
     if (!state.urgent && isUrgent(msg)) {
@@ -453,17 +451,31 @@ if (!state.problem) {
       saveMemory();
 
       return res.json({
-        replies: [smartFollowUp(raw)]
+        replies: [
+          await aiEnhance(
+            state,
+            raw,
+            smartFollowUp(raw),
+            "Ask ONE smart follow-up question about the problem"
+          )
+        ]
       });
     }
 
-    // -------- FOLLOW-UP (ONLY ONCE) --------
+    // -------- FOLLOW-UP --------
     if (state.problem && !state.followUpAsked && !state.name) {
       state.followUpAsked = true;
       saveMemory();
 
       return res.json({
-        replies: ["Okej 👍 vad heter du?"]
+        replies: [
+          await aiEnhance(
+            state,
+            raw,
+            "Okej 👍 vad heter du?",
+            "Move forward naturally"
+          )
+        ]
       });
     }
 
@@ -477,20 +489,21 @@ if (!state.problem) {
       saveMemory();
     }
 
-    // -------- AUTO SKIP TO CONFIRM --------
+    // -------- AUTO CONFIRM --------
     if (
       state.problem &&
       state.name &&
       state.phone &&
       state.address &&
-      state.time
+      state.time &&
+      !state.awaitingConfirmation
     ) {
       state.awaitingConfirmation = true;
       saveMemory();
 
       return res.json({
         replies: [
-          "Perfekt 👍 här är din bokning:",
+          "Perfekt 👍 här är det jag har:",
           `Problem: ${state.problem}`,
           `Detaljer: ${state.details || "-"}`,
           `Namn: ${state.name}`,
@@ -520,7 +533,9 @@ if (!state.problem) {
       saveMemory();
 
       return res.json({
-        replies: ["Vad har du för nummer? 👍"]
+        replies: [
+          await aiEnhance(state, raw, "Vad har du för nummer?", "Ask phone")
+        ]
       });
     }
 
@@ -536,7 +551,9 @@ if (!state.problem) {
       saveMemory();
 
       return res.json({
-        replies: ["Vilken adress gäller det?"]
+        replies: [
+          await aiEnhance(state, raw, "Vilken adress gäller det?", "Ask address")
+        ]
       });
     }
 
@@ -550,7 +567,9 @@ if (!state.problem) {
       saveMemory();
 
       return res.json({
-        replies: ["När passar det? 👍"]
+        replies: [
+          await aiEnhance(state, raw, "När passar det?", "Ask time")
+        ]
       });
     }
 
@@ -560,7 +579,9 @@ if (!state.problem) {
 
       if (!parsed) {
         return res.json({
-          replies: ["Vilken tid? 👍"]
+          replies: [
+            await aiEnhance(state, raw, "Vilken tid?", "Ask time clearly")
+          ]
         });
       }
 
