@@ -364,16 +364,23 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // -------- AI FILTER --------
-    if (!state.problem) {
-      const relevant = await isRelevantAI(raw);
+    // -------- GREETING FIX --------
+if (!state.problem && /hej|tja|hallå/.test(msg)) {
+  return res.json({
+    replies: ["Hej! Vad kan jag hjälpa dig med? 🙂"]
+  });
+}
 
-      if (!relevant) {
-        return res.json({
-          replies: ["Haha 😄 gäller det något med rör?"]
-        });
-      }
-    }
+// -------- AI FILTER --------
+if (!state.problem) {
+  const relevant = await isRelevantAI(raw);
+
+  if (!relevant) {
+    return res.json({
+      replies: ["Haha 😄 gäller det något med rör?"]
+    });
+  }
+}
 
     // -------- URGENT --------
     if (!state.urgent && isUrgent(msg)) {
