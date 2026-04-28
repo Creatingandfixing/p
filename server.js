@@ -312,7 +312,7 @@ app.post("/chat", async (req, res) => {
       }
 
       return res.json({
-        replies: ["Stämmer det? Skriv 'ja' eller 'nej' 👍"]
+        replies: ["Stämmer detta? (ja/nej) 👍"]
       });
     }
 
@@ -323,24 +323,14 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    // -------- AI AUTO-FILL --------
+    // -------- AI EXTRACT --------
     const aiData = await aiExtract(raw);
 
-    if (
-      aiData.problem &&
-      aiData.problem.length > 5 &&
-      !state.problem &&
-      !aiData.problem.match(/hej|tja|lol|test/i)
-    ) {
+    if (aiData.problem && !state.problem && aiData.problem.length > 5) {
       state.problem = aiData.problem;
     }
 
-    if (
-      aiData.name &&
-      !state.name &&
-      aiData.name.length < 40 &&
-      !aiData.name.match(/rör|läck|dusch|problem/i)
-    ) {
+    if (aiData.name && !state.name) {
       state.name = capitalize(aiData.name);
     }
 
@@ -349,11 +339,7 @@ app.post("/chat", async (req, res) => {
       if (isValidPhone(p)) state.phone = p;
     }
 
-    if (
-      aiData.address &&
-      !state.address &&
-      aiData.address.length < 60
-    ) {
+    if (aiData.address && !state.address) {
       state.address = capitalize(aiData.address);
     }
 
@@ -362,7 +348,7 @@ app.post("/chat", async (req, res) => {
       if (parsed) state.time = parsed.toISOString();
     }
 
-    // -------- REGEX FALLBACK (IMPORTANT) --------
+    // -------- REGEX FALLBACK --------
     if (!state.problem && /läck|stopp|vatten|dusch|kran/i.test(raw)) {
       state.problem = raw;
     }
@@ -451,14 +437,7 @@ app.post("/chat", async (req, res) => {
       saveMemory();
 
       return res.json({
-        replies: [
-          await aiEnhance(
-            state,
-            raw,
-            smartFollowUp(raw),
-            "Ask ONE smart follow-up question about the problem"
-          )
-        ]
+        replies: [smartFollowUp(raw)]
       });
     }
 
@@ -468,14 +447,7 @@ app.post("/chat", async (req, res) => {
       saveMemory();
 
       return res.json({
-        replies: [
-          await aiEnhance(
-            state,
-            raw,
-            "Okej 👍 vad heter du?",
-            "Move forward naturally"
-          )
-        ]
+        replies: ["Okej 👍 vad heter du?"]
       });
     }
 
@@ -517,7 +489,6 @@ app.post("/chat", async (req, res) => {
 
     // -------- NAME --------
     if (!state.name) {
-
       if (
         raw.match(/\d/) ||
         raw.length > 30 ||
@@ -533,9 +504,7 @@ app.post("/chat", async (req, res) => {
       saveMemory();
 
       return res.json({
-        replies: [
-          await aiEnhance(state, raw, "Vad har du för nummer?", "Ask phone")
-        ]
+        replies: ["Vad har du för nummer? 👍"]
       });
     }
 
@@ -551,9 +520,7 @@ app.post("/chat", async (req, res) => {
       saveMemory();
 
       return res.json({
-        replies: [
-          await aiEnhance(state, raw, "Vilken adress gäller det?", "Ask address")
-        ]
+        replies: ["Vilken adress gäller det? 👍"]
       });
     }
 
@@ -567,9 +534,7 @@ app.post("/chat", async (req, res) => {
       saveMemory();
 
       return res.json({
-        replies: [
-          await aiEnhance(state, raw, "När passar det?", "Ask time")
-        ]
+        replies: ["När passar det? 👍"]
       });
     }
 
@@ -579,9 +544,7 @@ app.post("/chat", async (req, res) => {
 
       if (!parsed) {
         return res.json({
-          replies: [
-            await aiEnhance(state, raw, "Vilken tid?", "Ask time clearly")
-          ]
+          replies: ["Vilken tid? 👍"]
         });
       }
 
