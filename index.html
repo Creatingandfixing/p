@@ -38,6 +38,7 @@
 
   #chat-widget {
     display: none;
+    flex-direction: column;
     position: fixed;
     bottom: 90px;
     right: 20px;
@@ -47,7 +48,7 @@
     border-radius: 18px;
     box-shadow: 0 20px 60px rgba(0,0,0,0.25);
     overflow: hidden;
-    flex-direction: column;
+   
   }
 
   #chat-header {
@@ -192,7 +193,8 @@ function showTyping() {
   typing.className = "msg bot";
   typing.innerText = "...";
 
-  box.appendChild(typing);
+ box.appendChild(typing);
+box.scrollTop = box.scrollHeight;
 }
 
 function removeTyping() {

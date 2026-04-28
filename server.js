@@ -575,3 +575,15 @@ app.post("/chat", async (req, res) => {
     res.json({ replies: ["⚠️ Något gick fel"] });
   }
 });
+
+// -------- HEALTH CHECK --------
+app.get("/ping", (req, res) => {
+  res.send("OK");
+});
+
+// -------- START SERVER --------
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🔥 Server running on port ${PORT}`);
+});
